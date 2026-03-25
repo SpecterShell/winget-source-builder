@@ -108,7 +108,7 @@ fn provision_wingetutil(manifest_dir: &Path, destination_dir: &Path, target_arch
     let platform = match target_arch {
         "x86_64" => "x64",
         "aarch64" => "arm64",
-        "x86" => "Win32",
+        "x86" => "x86",
         other if !other.is_empty() => other,
         _ => "x64",
     };

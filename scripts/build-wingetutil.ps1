@@ -69,6 +69,15 @@ function Get-HostPlatform {
     return "x64"
 }
 
+function Get-ToolchainPlatform {
+    param([Parameter(Mandatory = $true)][string]$Platform)
+
+    switch ($Platform.ToLowerInvariant()) {
+        "win32" { return "x86" }
+        default { return $Platform.ToLowerInvariant() }
+    }
+}
+
 $wingetCliRoot = Resolve-RequiredPath $WingetCliRoot
 $solutionPath = Join-Path $wingetCliRoot "src\AppInstallerCLI.sln"
 if (-not (Test-Path -LiteralPath $solutionPath)) {
@@ -99,14 +108,15 @@ if (-not (Test-Path -LiteralPath $msbuild)) {
 }
 
 $hostPlatform = Get-HostPlatform
-$vcvarsPlatform = if ($Platform.ToLowerInvariant() -eq $hostPlatform.ToLowerInvariant()) {
-    $Platform
+$toolchainPlatform = Get-ToolchainPlatform -Platform $Platform
+$vcvarsPlatform = if ($toolchainPlatform -eq $hostPlatform.ToLowerInvariant()) {
+    $toolchainPlatform
 } else {
-    "$hostPlatform`_$Platform"
+    "$hostPlatform`_$toolchainPlatform"
 }
 
 $developerEnvironment = if (Test-Path -LiteralPath $vsDevCmd) {
-    "`"$vsDevCmd`" -arch=$Platform -host_arch=$hostPlatform"
+    "`"$vsDevCmd`" -arch=$toolchainPlatform -host_arch=$hostPlatform"
 } else {
     "`"$vcvarsall`" $vcvarsPlatform"
 }
