@@ -12,7 +12,30 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$wingetCliRoot = (Resolve-Path -LiteralPath $WingetCliRoot -ErrorAction Stop).Path
+function Normalize-PathString {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $normalized = $Path
+    $providerPrefix = "Microsoft.PowerShell.Core\FileSystem::"
+    if ($normalized.StartsWith($providerPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $normalized = $normalized.Substring($providerPrefix.Length)
+    }
+
+    if ($normalized.StartsWith("\\?\", [System.StringComparison]::Ordinal)) {
+        $normalized = $normalized.Substring(4)
+    }
+
+    return $normalized
+}
+
+function Resolve-RequiredPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolved = Resolve-Path -LiteralPath (Normalize-PathString $Path) -ErrorAction Stop
+    return Normalize-PathString $resolved.Path
+}
+
+$wingetCliRoot = Resolve-RequiredPath $WingetCliRoot
 $solutionPath = Join-Path $wingetCliRoot "src\AppInstallerCLI.sln"
 if (-not (Test-Path -LiteralPath $solutionPath)) {
     throw "winget-cli solution was not found at $solutionPath"

@@ -88,13 +88,13 @@ fn resolve_winget_cli_root(workspace_root: &Path) -> Option<PathBuf> {
             .join("AppInstallerCLI.sln")
             .is_file()
         {
-            return Some(env_override.canonicalize().unwrap_or(env_override));
+            return Some(env_override);
         }
     }
 
     let submodule = workspace_root.join("winget-cli");
     if submodule.join("src").join("AppInstallerCLI.sln").is_file() {
-        return Some(submodule.canonicalize().unwrap_or(submodule));
+        return Some(submodule);
     }
 
     None
