@@ -62,6 +62,12 @@ jobs:
           git -c submodule.recurse=false submodule sync -- ${{ matrix.submodules }}
           git -c submodule.recurse=false submodule update --init --depth 1 ${{ matrix.submodules }}
 
+      - name: Resolve winget-cli revision
+        if: runner.os == 'Windows'
+        id: winget_cli_revision
+        shell: bash
+        run: echo "value=$(git -C winget-cli rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
         shell: pwsh
@@ -79,8 +85,23 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Restore WinGetUtil.dll cache
+        if: runner.os == 'Windows'
+        id: wingetutil_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/debug/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Save WinGetUtil.dll cache
+        if: runner.os == 'Windows' && steps.wingetutil_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/debug/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
   test:
     name: Test (${{ matrix.name }})
@@ -108,6 +129,12 @@ jobs:
           git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
           git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
 
+      - name: Resolve winget-cli revision
+        if: runner.os == 'Windows'
+        id: winget_cli_revision
+        shell: bash
+        run: echo "value=$(git -C winget-cli rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
         shell: pwsh
@@ -123,8 +150,23 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Restore WinGetUtil.dll cache
+        if: runner.os == 'Windows'
+        id: wingetutil_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/debug/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
       - name: Run tests
         run: cargo test --verbose
+
+      - name: Save WinGetUtil.dll cache
+        if: runner.os == 'Windows' && steps.wingetutil_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/debug/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
   build:
     name: Build (${{ matrix.name }})
@@ -181,6 +223,12 @@ jobs:
           git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
           git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
 
+      - name: Resolve winget-cli revision
+        if: runner.os == 'Windows'
+        id: winget_cli_revision
+        shell: bash
+        run: echo "value=$(git -C winget-cli rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
         shell: pwsh
@@ -198,9 +246,24 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Restore WinGetUtil.dll cache
+        if: runner.os == 'Windows'
+        id: wingetutil_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/${{ matrix.target }}/release/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
 
       - name: Build Rust CLI
         run: cargo build --release --verbose --target ${{ matrix.target }}
+
+      - name: Save WinGetUtil.dll cache
+        if: runner.os == 'Windows' && steps.wingetutil_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/${{ matrix.target }}/release/WinGetUtil.dll
+          key: wingetutil-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
       - name: Stage artifact
         if: runner.os == 'Windows'
