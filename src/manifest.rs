@@ -3,10 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Value as YamlValue};
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ComputedVersionSnapshot {
@@ -14,7 +15,9 @@ pub struct ComputedVersionSnapshot {
     pub package_id: String,
     pub package_version: String,
     pub channel: String,
+    pub index_projection: VersionIndexProjection,
     pub version_content_sha256: Vec<u8>,
+    pub installers: Vec<InstallerRecord>,
     pub version_installer_sha256: Vec<u8>,
     pub published_manifest_sha256: Vec<u8>,
     pub published_manifest_relpath: String,
@@ -28,8 +31,36 @@ pub struct ValidationRequirement {
     pub package_id: String,
     pub package_version: String,
     pub channel: String,
-    pub version_installer_sha256: String,
+    pub installer: InstallerRecord,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InstallerRecord {
+    pub installer_sha256: String,
+    pub installer_url: Option<String>,
+    pub architecture: Option<String>,
+    pub installer_type: Option<String>,
+    pub installer_locale: Option<String>,
+    pub scope: Option<String>,
+    pub package_family_name: Option<String>,
+    pub product_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VersionIndexProjection {
+    pub package_name: String,
+    pub publisher: Option<String>,
+    pub moniker: Option<String>,
+    pub arp_min_version: Option<String>,
+    pub arp_max_version: Option<String>,
+    pub tags: Vec<String>,
+    pub commands: Vec<String>,
+    pub package_family_names: Vec<String>,
+    pub product_codes: Vec<String>,
+    pub upgrade_codes: Vec<String>,
+    pub normalized_names: Vec<String>,
+    pub normalized_publishers: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -387,12 +418,13 @@ fn build_snapshot_from_merged_manifest(
     normalize_top_level_string_fields(&mut merged, &expected_package_version)?;
 
     let canonical_content = canonicalize_full_manifest(&merged)?;
-    let installer_projection = canonicalize_installer_manifest(&merged)?;
+    let installers = build_installer_records(&merged)?;
+    let index_projection = build_index_projection(&merged)?;
 
     let canonical_content_bytes =
         serde_json::to_vec(&canonical_content).context("failed to serialize canonical content")?;
-    let installer_bytes = serde_json::to_vec(&installer_projection)
-        .context("failed to serialize installer projection")?;
+    let installer_bytes =
+        serde_json::to_vec(&installers).context("failed to serialize installer projections")?;
 
     let published_manifest_bytes =
         deterministic_manifest_yaml(&canonical_content).context("failed to render merged YAML")?;
@@ -413,13 +445,319 @@ fn build_snapshot_from_merged_manifest(
         package_id,
         package_version,
         channel,
+        index_projection,
         version_content_sha256: sha256_bytes(&canonical_content_bytes),
+        installers,
         version_installer_sha256: sha256_bytes(&installer_bytes),
         published_manifest_sha256,
         published_manifest_relpath,
         published_manifest_bytes,
         source_file_count,
     })
+}
+
+fn build_index_projection(root: &YamlValue) -> Result<VersionIndexProjection> {
+    let mut tags = BTreeSet::new();
+    let mut commands = BTreeSet::new();
+    let mut package_family_names = BTreeSet::new();
+    let mut product_codes = BTreeSet::new();
+    let mut upgrade_codes = BTreeSet::new();
+    let mut normalized_names = BTreeSet::new();
+    let mut normalized_publishers = BTreeSet::new();
+
+    let package_name = get_optional_string(root, "PackageName").unwrap_or_default();
+    let publisher = get_optional_string(root, "Publisher");
+    let moniker = get_optional_string(root, "Moniker");
+    let arp_min_version = get_optional_string(root, "ArpMinVersion");
+    let arp_max_version = get_optional_string(root, "ArpMaxVersion");
+
+    for tag in get_sequence_strings(root, "Tags")? {
+        tags.insert(tag);
+    }
+    for command in get_sequence_strings(root, "Commands")? {
+        commands.insert(command);
+    }
+    if let Some(package_family_name) = get_optional_string(root, "PackageFamilyName") {
+        package_family_names.insert(package_family_name);
+    }
+
+    add_normalized_name(&mut normalized_names, &package_name, false);
+    if let Some(publisher) = get_optional_string(root, "Publisher") {
+        add_normalized_publisher(&mut normalized_publishers, &publisher);
+    }
+
+    for localization in get_localizations(root)? {
+        if let Some(name) = get_optional_string(localization, "PackageName") {
+            add_normalized_name(&mut normalized_names, &name, false);
+        }
+        if let Some(publisher) = get_optional_string(localization, "Publisher") {
+            add_normalized_publisher(&mut normalized_publishers, &publisher);
+        }
+    }
+
+    collect_projection_entry_data(
+        root,
+        &mut commands,
+        &mut package_family_names,
+        &mut product_codes,
+        &mut upgrade_codes,
+        &mut normalized_names,
+        &mut normalized_publishers,
+    );
+
+    for installer in get_installers(root)? {
+        collect_projection_entry_data(
+            installer,
+            &mut commands,
+            &mut package_family_names,
+            &mut product_codes,
+            &mut upgrade_codes,
+            &mut normalized_names,
+            &mut normalized_publishers,
+        );
+    }
+
+    Ok(VersionIndexProjection {
+        package_name,
+        publisher,
+        moniker,
+        arp_min_version,
+        arp_max_version,
+        tags: tags.into_iter().collect(),
+        commands: commands.into_iter().collect(),
+        package_family_names: package_family_names.into_iter().collect(),
+        product_codes: product_codes.into_iter().collect(),
+        upgrade_codes: upgrade_codes.into_iter().collect(),
+        normalized_names: normalized_names.into_iter().collect(),
+        normalized_publishers: normalized_publishers.into_iter().collect(),
+    })
+}
+
+fn collect_projection_entry_data(
+    value: &YamlValue,
+    commands: &mut BTreeSet<String>,
+    package_family_names: &mut BTreeSet<String>,
+    product_codes: &mut BTreeSet<String>,
+    upgrade_codes: &mut BTreeSet<String>,
+    normalized_names: &mut BTreeSet<String>,
+    normalized_publishers: &mut BTreeSet<String>,
+) {
+    if let Ok(sequence_commands) = get_sequence_strings(value, "Commands") {
+        commands.extend(sequence_commands);
+    }
+    if let Some(package_family_name) = get_optional_string(value, "PackageFamilyName") {
+        package_family_names.insert(package_family_name);
+    }
+
+    for entry in get_apps_and_features_entries(value) {
+        if let Some(display_name) = get_optional_string(entry, "DisplayName") {
+            add_normalized_name(normalized_names, &display_name, true);
+        }
+        if let Some(publisher) = get_optional_string(entry, "Publisher") {
+            add_normalized_publisher(normalized_publishers, &publisher);
+        }
+        if let Some(product_code) = get_optional_string(entry, "ProductCode") {
+            product_codes.insert(product_code);
+        }
+        if let Some(upgrade_code) = get_optional_string(entry, "UpgradeCode") {
+            upgrade_codes.insert(upgrade_code);
+        }
+    }
+}
+
+fn get_installers(root: &YamlValue) -> Result<Vec<&YamlValue>> {
+    Ok(as_mapping(root)?
+        .get(YamlValue::String("Installers".to_string()))
+        .and_then(YamlValue::as_sequence)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default())
+}
+
+fn get_localizations(root: &YamlValue) -> Result<Vec<&YamlValue>> {
+    Ok(as_mapping(root)?
+        .get(YamlValue::String("Localization".to_string()))
+        .and_then(YamlValue::as_sequence)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default())
+}
+
+fn get_apps_and_features_entries(value: &YamlValue) -> Vec<&YamlValue> {
+    value
+        .as_mapping()
+        .and_then(|map| map.get(YamlValue::String("AppsAndFeaturesEntries".to_string())))
+        .and_then(YamlValue::as_sequence)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default()
+}
+
+fn get_sequence_strings(value: &YamlValue, key: &str) -> Result<Vec<String>> {
+    let Some(sequence) = as_mapping(value)?
+        .get(YamlValue::String(key.to_string()))
+        .and_then(YamlValue::as_sequence)
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(sequence
+        .iter()
+        .filter_map(yaml_scalar_to_string)
+        .collect::<Vec<_>>())
+}
+
+fn add_normalized_name(
+    out: &mut BTreeSet<String>,
+    value: &str,
+    include_architecture_variant: bool,
+) {
+    let normalized = normalize_name(value);
+    if !normalized.base.is_empty() {
+        out.insert(normalized.base.clone());
+    }
+    if include_architecture_variant && let Some(arch) = normalized.architecture {
+        out.insert(format!("{}({arch})", normalized.base));
+    }
+}
+
+fn add_normalized_publisher(out: &mut BTreeSet<String>, value: &str) {
+    let normalized = normalize_publisher(value);
+    if !normalized.is_empty() {
+        out.insert(normalized);
+    }
+}
+
+#[derive(Debug)]
+struct NormalizedNameParts {
+    base: String,
+    architecture: Option<&'static str>,
+}
+
+fn normalize_name(value: &str) -> NormalizedNameParts {
+    let normalized = value.nfkc().collect::<String>().to_lowercase();
+    let architecture = detect_architecture(&normalized);
+    let without_arch = strip_architecture_tokens(&normalized);
+    let without_locale = strip_locale_tokens(&without_arch);
+
+    NormalizedNameParts {
+        base: collapse_search_text(&without_locale),
+        architecture,
+    }
+}
+
+fn normalize_publisher(value: &str) -> String {
+    let folded = value.nfkc().collect::<String>().to_lowercase();
+    let mut tokens = Vec::new();
+
+    for token in folded
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if !tokens.is_empty() && is_legal_entity_suffix(token) {
+            break;
+        }
+        tokens.push(token);
+    }
+
+    collapse_search_text(&tokens.join(""))
+}
+
+fn is_legal_entity_suffix(token: &str) -> bool {
+    matches!(
+        token,
+        "ab" | "ad"
+            | "ag"
+            | "aps"
+            | "as"
+            | "asa"
+            | "bv"
+            | "co"
+            | "company"
+            | "corp"
+            | "corporation"
+            | "cv"
+            | "doo"
+            | "ev"
+            | "ges"
+            | "gesmbh"
+            | "gmbh"
+            | "holding"
+            | "holdings"
+            | "inc"
+            | "incorporated"
+            | "kg"
+            | "ks"
+            | "limited"
+            | "llc"
+            | "lp"
+            | "ltd"
+            | "ltda"
+            | "mbh"
+            | "nv"
+            | "plc"
+            | "ps"
+            | "pty"
+            | "pvt"
+            | "sa"
+            | "sarl"
+            | "sca"
+            | "sc"
+            | "sl"
+            | "spa"
+            | "sp"
+            | "srl"
+            | "sro"
+            | "subsidiary"
+    )
+}
+
+fn collapse_search_text(value: &str) -> String {
+    value.chars().filter(|ch| ch.is_alphanumeric()).collect()
+}
+
+fn detect_architecture(value: &str) -> Option<&'static str> {
+    let has_x86 = contains_architecture_token(value, &["x86", "32 bit", "32-bit"]);
+    let has_x64 = contains_architecture_token(value, &["x64", "x86_64", "64 bit", "64-bit"]);
+
+    match (has_x86, has_x64) {
+        (true, false) => Some("X86"),
+        (false, true) => Some("X64"),
+        _ => None,
+    }
+}
+
+fn contains_architecture_token(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn strip_architecture_tokens(value: &str) -> String {
+    let mut result = value.to_string();
+    for token in [
+        "x86_64", "x64", "x86", "64-bit", "64 bit", "32-bit", "32 bit",
+    ] {
+        result = result.replace(token, " ");
+    }
+    result
+}
+
+fn strip_locale_tokens(value: &str) -> String {
+    let mut tokens = Vec::new();
+    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, '(' | ')' | '[' | ']')) {
+        if token.len() == 5 {
+            let bytes = token.as_bytes();
+            if bytes[0].is_ascii_alphabetic()
+                && bytes[1].is_ascii_alphabetic()
+                && bytes[2] == b'-'
+                && bytes[3].is_ascii_alphabetic()
+                && bytes[4].is_ascii_alphabetic()
+            {
+                continue;
+            }
+        }
+        if !token.is_empty() {
+            tokens.push(token);
+        }
+    }
+
+    tokens.join(" ")
 }
 
 fn normalize_top_level_string_fields(root: &mut YamlValue, package_version: &str) -> Result<()> {
@@ -462,9 +800,113 @@ fn canonicalize_full_manifest(root: &YamlValue) -> Result<JsonValue> {
     canonicalize_yaml(root, &[])
 }
 
-fn canonicalize_installer_manifest(root: &YamlValue) -> Result<JsonValue> {
-    let filtered = filter_for_installer_hash(root, true)?;
-    canonicalize_yaml(&filtered, &[])
+pub fn installer_records_to_json(installers: &[InstallerRecord]) -> Result<String> {
+    serde_json::to_string(installers).context("failed to serialize installer records")
+}
+
+pub fn parse_installer_records_json(json: Option<&str>) -> Result<Vec<InstallerRecord>> {
+    match json {
+        Some(json) if !json.trim().is_empty() => {
+            serde_json::from_str(json).context("failed to deserialize installer records")
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+pub fn added_installers(
+    previous: &[InstallerRecord],
+    current: &[InstallerRecord],
+) -> Vec<InstallerRecord> {
+    let previous_hashes = previous
+        .iter()
+        .map(|installer| installer.installer_sha256.as_str())
+        .collect::<BTreeSet<_>>();
+
+    current
+        .iter()
+        .filter(|installer| !previous_hashes.contains(installer.installer_sha256.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn build_installer_records(root: &YamlValue) -> Result<Vec<InstallerRecord>> {
+    let root_map = as_mapping(root)?;
+    let installers = root_map
+        .get(YamlValue::String("Installers".to_string()))
+        .and_then(YamlValue::as_sequence)
+        .ok_or_else(|| anyhow!("merged manifest is missing Installers"))?;
+
+    let mut records = installers
+        .iter()
+        .map(|installer| build_installer_record(root, installer))
+        .collect::<Result<Vec<_>>>()?;
+    records.sort();
+    records.dedup();
+    Ok(records)
+}
+
+fn build_installer_record(root: &YamlValue, installer: &YamlValue) -> Result<InstallerRecord> {
+    let effective = effective_installer_manifest(root, installer)?;
+    let canonical = canonicalize_yaml(&effective, &[])?;
+    let canonical_bytes =
+        serde_json::to_vec(&canonical).context("failed to serialize installer record")?;
+
+    let product_codes = get_apps_and_features_entries(&effective)
+        .into_iter()
+        .filter_map(|entry| get_optional_string(entry, "ProductCode"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    Ok(InstallerRecord {
+        installer_sha256: hex::encode(sha256_bytes(&canonical_bytes)),
+        installer_url: get_optional_string(&effective, "InstallerUrl"),
+        architecture: get_optional_string(&effective, "Architecture"),
+        installer_type: get_optional_string(&effective, "InstallerType"),
+        installer_locale: get_optional_string(&effective, "InstallerLocale")
+            .or_else(|| get_optional_string(&effective, "PackageLocale")),
+        scope: get_optional_string(&effective, "Scope"),
+        package_family_name: get_optional_string(&effective, "PackageFamilyName"),
+        product_codes,
+    })
+}
+
+fn effective_installer_manifest(root: &YamlValue, installer: &YamlValue) -> Result<YamlValue> {
+    let filtered_root = filter_for_installer_hash(root, true)?;
+    let filtered_installer = filter_for_installer_hash(installer, false)?;
+    let root_map = as_mapping(&filtered_root)?;
+    let installer_map = as_mapping(&filtered_installer)?;
+
+    let mut effective = Mapping::new();
+    for identity_key in ["PackageIdentifier", "PackageVersion", "Channel"] {
+        if let Some(value) = root_map.get(YamlValue::String(identity_key.to_string())) {
+            effective.insert(YamlValue::String(identity_key.to_string()), value.clone());
+        }
+    }
+
+    let mut installer_effective = Mapping::new();
+    for (key, value) in root_map {
+        let key_string = key
+            .as_str()
+            .ok_or_else(|| anyhow!("manifest key must be a string"))?;
+        if matches!(
+            key_string,
+            "PackageIdentifier" | "PackageVersion" | "Channel" | "Installers"
+        ) {
+            continue;
+        }
+        installer_effective.insert(key.clone(), value.clone());
+    }
+
+    for (key, value) in installer_map {
+        installer_effective.insert(key.clone(), value.clone());
+    }
+
+    effective.insert(
+        YamlValue::String("Installer".to_string()),
+        YamlValue::Mapping(installer_effective),
+    );
+    Ok(YamlValue::Mapping(effective))
 }
 
 fn canonicalize_yaml(value: &YamlValue, path: &[String]) -> Result<JsonValue> {
@@ -947,16 +1389,8 @@ ManifestVersion: 1.9.0
 "#,
         );
 
-        let left_hash = sha256_bytes(
-            serde_json::to_vec(&canonicalize_installer_manifest(&left).unwrap())
-                .unwrap()
-                .as_slice(),
-        );
-        let right_hash = sha256_bytes(
-            serde_json::to_vec(&canonicalize_installer_manifest(&right).unwrap())
-                .unwrap()
-                .as_slice(),
-        );
+        let left_hash = build_installer_records(&left).unwrap();
+        let right_hash = build_installer_records(&right).unwrap();
 
         assert_eq!(left_hash, right_hash);
     }
@@ -1008,6 +1442,12 @@ PackageUrl: https://example.invalid
             object.get("PackageUrl").and_then(JsonValue::as_str),
             Some("https://example.invalid")
         );
+    }
+
+    #[test]
+    fn normalize_publisher_drops_legal_entity_suffixes() {
+        assert_eq!(normalize_publisher("Example Inc"), "example");
+        assert_eq!(normalize_publisher("Example Holdings LLC"), "example");
     }
 
     #[test]
@@ -1163,7 +1603,9 @@ Installers:
             package_id: "NHNCorporation.Dooray!Messenger".to_string(),
             package_version: "2.2.2.1".to_string(),
             channel: String::new(),
+            index_projection: VersionIndexProjection::default(),
             version_content_sha256: Vec::new(),
+            installers: Vec::new(),
             version_installer_sha256: Vec::new(),
             published_manifest_sha256: Vec::new(),
             published_manifest_relpath: String::new(),

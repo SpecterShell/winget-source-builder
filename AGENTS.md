@@ -5,7 +5,7 @@
 - `src/`: Rust CLI, manifest logic, i18n integration, state store, and build orchestration.
 - `locales/`: external translation files consumed by `rust-i18n`.
 - `winget-cli/`: git submodule used to build `WinGetUtil.dll` during Windows builds.
-- `action.yml`: reusable GitHub Action entrypoint for source/template repositories.
+- `msix-packaging/`: git submodule used to build `makemsix` for non-Windows packaging.
 - `scripts/`: local and CI bootstrap scripts, including native WinGetUtil provisioning.
 - `tests/data/e2e-repo/`: minimal fixture repo for end-to-end testing, including template-style `packaging/`.
 - `docs/`: multilingual project documentation.
@@ -23,21 +23,23 @@
 
 ## Status
 
-- V1 targets a Windows-first static publish tree containing `source2.msix`, hosted merged manifests, and compressed per-package `packages/<PackageIdentifier>/<hash8>/versionData.mszyml`.
+- The builder supports both preindexed source package families:
+  `source.msix` (`v1`) and `source2.msix` (`v2`).
 - The valid preindexed source contract is: signed `source.msix` or `source2.msix` carrying `Public/index.db`, with hosted manifest payloads and per-package `versionData.mszyml` sidecars alongside it.
 - V1 records validation requirements only. Installer execution belongs to a later standalone validation pipeline.
-- `source2.msix` is the only source package format in scope for v1.
+- The Rust backend can package `v1` on Linux and macOS through `makemsix` built from the bundled `msix-packaging` submodule.
 - Runtime i18n is backed by `rust-i18n` and external locale files under `locales/`. New locales can be added without editing Rust source files.
-- The builder repository now ships a reusable GitHub Action, while source branding and MSIX resources live in the separate template/source repository.
-- The template/source workflow is responsible for signing `source2.msix` with its own certificate secrets after the builder produces the publish tree.
+- Source branding and MSIX resources live in the separate template/source repository.
+- Downstream repositories are expected to download release artifacts directly in their own workflows, not via a reusable action from this repository.
+- The template/source workflow is responsible for signing the generated source package with its own certificate secrets after the builder produces the publish tree.
 
 ## Known Limitations
 
-- V1 is Windows-first and `source2.msix`-only.
 - V1 queues validation requirements but does not execute installer validation.
 - If WinGetUtil remains the writer, final publish work is still partly `O(total packages)` because published package tables are rebuilt during packaging.
 - One mutable index cannot be meaningfully parallelized. Parallelism applies around scan, parse and merge, hashing, diffing, staging, and validation scheduling.
 - The current incremental remove and update path still depends on the previous published `--out` tree being present, because old hosted manifests are needed for replay.
+- The Rust `v2` backend is still Windows-only because `versionData.mszyml` sidecars use MSZIP.
 
 ## Related Projects And References
 
@@ -58,7 +60,7 @@
 ## Architecture Decisions
 
 - Keep the core pipeline backend-agnostic and package-centric.
-- Rust owns scan, WinGet-compatible merge/parsing, canonicalization, hashing, diffing, state management, validation scheduling, staging, publish planning, direct WinGetUtil interop, and `makeappx` orchestration.
+- Rust owns scan, WinGet-compatible merge/parsing, canonicalization, hashing, diffing, state management, validation scheduling, staging, publish planning, direct WinGetUtil interop, and `makeappx` or `makemsix` orchestration.
 - Keep the Windows boundary thin even though it now lives inside Rust. A future custom writer should still be able to replace WinGetUtil-facing code without changing scan, diff, or state logic.
 - Deterministic hosted merged manifests are the single source of truth for published manifest bytes and for WinGetUtil ingestion.
 - The builder consumes `packaging/` from the source/template repository. Branding and Appx metadata do not belong in the builder repository.
@@ -98,7 +100,7 @@
 3. Keep the builder focused on indexing, not installer execution.
    Validation should be queued now and executed later in a separate Windows Sandbox or VM-oriented pipeline.
 4. Preserve the upgrade path for future source formats.
-   `source2.msix` is enough for v1, but the core should not hard-code the source format boundary.
+   The core should not hard-code the source format boundary, even though `v1` and `v2` are the only formats in scope now.
 5. Revisit a custom writer only when the compatibility tradeoff becomes justified.
    The asymptotic upside is real, but correctness parity with WinGet is the hard part.
 
@@ -109,7 +111,7 @@
 - Milestone 1: state engine
   Implement file-state scan, version and package snapshots, candidate build journal, and hash-based diffing.
 - Milestone 2: WinGet-compatible writer
-  Add persistent mutable DB handling, incremental add/update/remove, staged `PrepareForPackaging()`, and `source2.msix` creation.
+  Add persistent mutable DB handling, incremental add/update/remove, staged `PrepareForPackaging()`, and source package creation.
 - Milestone 3: staged publish tree
   Add content-addressed hosted manifests, `versionData.mszyml` sidecars, exact delete sets, and atomic promotion.
 - Milestone 4: validation pipeline
@@ -131,6 +133,8 @@
 - Keep MSIX static resources out of Rust source files.
   `packaging/` should stay in the source/template repository so Appx manifest and image updates do not require rebuilding the action or touching builder internals.
 - The Windows boundary should stay thin. Rust is a good fit for parallel scan and diff work, and direct FFI keeps the WinGetUtil path simpler than a separate wrapper executable.
-- CI must not assume a fully provisioned Windows indexing environment. The end-to-end path needs to skip itself cleanly when `WinGetUtil.dll` or `makeappx.exe` is unavailable.
+- CI must not assume a fully provisioned packaging environment. End-to-end tests need to skip themselves cleanly when the required WinGetUtil or MSIX packager dependency is unavailable.
 - GitHub-hosted Windows builds should be treated as `windows-2025` builds, not a vague `windows-latest` target.
-  The workflows and reusable action now add `VCPKG_INSTALLATION_ROOT` to `PATH` explicitly before building `winget-cli`, instead of assuming `vcpkg.exe` is already resolvable.
+  The workflows now add `VCPKG_INSTALLATION_ROOT` to `PATH` explicitly before building `winget-cli`, instead of assuming `vcpkg.exe` is already resolvable.
+- For downstream consumption, a plain workflow that downloads a release artifact is easier to reason about than maintaining a reusable action contract in parallel.
+- Non-Windows packaging support is practical for `v1` if `makemsix` is provisioned beside the executable and launched with its library search path set explicitly.

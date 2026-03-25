@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::CatalogFormat;
+
 #[derive(Debug, Clone)]
 pub struct StoredFile {
     pub path: String,
@@ -20,6 +22,8 @@ pub struct StoredVersion {
     pub package_id: String,
     pub package_version: String,
     pub channel: String,
+    pub index_projection_json: Option<String>,
+    pub installers_json: Option<String>,
     pub published_manifest_relpath: String,
     pub published_manifest_sha256: Vec<u8>,
     pub version_content_sha256: Vec<u8>,
@@ -101,8 +105,12 @@ impl StateStore {
         self.root.join("validation-queue.json")
     }
 
-    pub fn mutable_db_path(&self) -> PathBuf {
-        self.root.join("writer").join("mutable-v2.db")
+    pub fn mutable_db_path_for_format(&self, format: CatalogFormat) -> PathBuf {
+        let file_name = match format {
+            CatalogFormat::V1 => "mutable-v1.db",
+            CatalogFormat::V2 => "mutable-v2.db",
+        };
+        self.root.join("writer").join(file_name)
     }
 
     pub fn begin_build(&self, started_unix: i64) -> Result<i64> {
@@ -117,6 +125,19 @@ impl StateStore {
         self.conn.execute(
             "UPDATE builds SET finished_at_unix = ?2, status = 'failed', error_text = ?3 WHERE build_id = ?1",
             params![build_id, finished_unix, error],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_build_finished(
+        &self,
+        build_id: i64,
+        finished_unix: i64,
+        status: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE builds SET finished_at_unix = ?2, status = ?3, error_text = NULL WHERE build_id = ?1",
+            params![build_id, finished_unix, status],
         )?;
         Ok(())
     }
@@ -158,7 +179,7 @@ impl StateStore {
 
     pub fn load_versions_current(&self) -> Result<HashMap<String, StoredVersion>> {
         let mut statement = self.conn.prepare(
-            "SELECT version_dir, package_id, package_version, channel, published_manifest_relpath, published_manifest_sha256, version_content_sha256, version_installer_sha256, source_file_count FROM versions_current",
+            "SELECT version_dir, package_id, package_version, channel, index_projection_json, installers_json, published_manifest_relpath, published_manifest_sha256, version_content_sha256, version_installer_sha256, source_file_count FROM versions_current",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(StoredVersion {
@@ -166,11 +187,13 @@ impl StateStore {
                 package_id: row.get(1)?,
                 package_version: row.get(2)?,
                 channel: row.get(3)?,
-                published_manifest_relpath: row.get(4)?,
-                published_manifest_sha256: row.get(5)?,
-                version_content_sha256: row.get(6)?,
-                version_installer_sha256: row.get(7)?,
-                source_file_count: row.get::<_, i64>(8)? as usize,
+                index_projection_json: row.get(4)?,
+                installers_json: row.get(5)?,
+                published_manifest_relpath: row.get(6)?,
+                published_manifest_sha256: row.get(7)?,
+                version_content_sha256: row.get(8)?,
+                version_installer_sha256: row.get(9)?,
+                source_file_count: row.get::<_, i64>(10)? as usize,
             })
         })?;
 
@@ -324,8 +347,8 @@ impl StateStore {
 
         {
             let mut statement = tx.prepare(
-                "INSERT INTO versions_current(version_dir, package_id, package_version, channel, published_manifest_relpath, published_manifest_sha256, version_content_sha256, version_installer_sha256, source_file_count)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO versions_current(version_dir, package_id, package_version, channel, index_projection_json, installers_json, published_manifest_relpath, published_manifest_sha256, version_content_sha256, version_installer_sha256, source_file_count)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;
             for version in update.versions {
                 statement.execute(params![
@@ -333,6 +356,8 @@ impl StateStore {
                     version.package_id,
                     version.package_version,
                     version.channel,
+                    version.index_projection_json,
+                    version.installers_json,
                     version.published_manifest_relpath,
                     version.published_manifest_sha256,
                     version.version_content_sha256,
@@ -418,6 +443,8 @@ impl StateStore {
                 package_id TEXT NOT NULL,
                 package_version TEXT NOT NULL,
                 channel TEXT NOT NULL,
+                index_projection_json TEXT NULL,
+                installers_json TEXT NULL,
                 published_manifest_relpath TEXT NOT NULL,
                 published_manifest_sha256 BLOB NOT NULL,
                 version_content_sha256 BLOB NOT NULL,
@@ -461,13 +488,36 @@ impl StateStore {
                 package_id TEXT NOT NULL,
                 package_version TEXT NOT NULL,
                 channel TEXT NOT NULL,
-                version_installer_sha256 BLOB NOT NULL,
+                installer_sha256 TEXT NOT NULL,
                 status TEXT NOT NULL,
                 validated_at_unix INTEGER NOT NULL,
-                PRIMARY KEY(package_id, package_version, channel, version_installer_sha256)
+                PRIMARY KEY(package_id, package_version, channel, installer_sha256)
             );
             ",
         )?;
+        self.ensure_column_exists("versions_current", "index_projection_json", "TEXT NULL")?;
+        self.ensure_column_exists("versions_current", "installers_json", "TEXT NULL")?;
+        Ok(())
+    }
+
+    fn ensure_column_exists(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let mut statement = self
+            .conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .with_context(|| format!("failed to inspect table {table}"))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+        for row in rows {
+            if row? == column {
+                return Ok(());
+            }
+        }
+
+        self.conn
+            .execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .with_context(|| format!("failed to add column {column} to {table}"))?;
         Ok(())
     }
 }

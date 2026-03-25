@@ -69,8 +69,26 @@ jobs:
         run: cargo test --verbose
 
   build:
-    name: Build (windows-x64)
-    runs-on: windows-2025
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            artifact_name: winget-source-builder-linux-x86_64
+          - name: macos
+            os: macos-latest
+            artifact_name: winget-source-builder-macos
+          - name: windows-x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact_name: winget-source-builder-windows-x86_64
+          - name: windows-aarch64
+            os: windows-2025
+            target: aarch64-pc-windows-msvc
+            artifact_name: winget-source-builder-windows-aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +96,7 @@ jobs:
           submodules: recursive
 
       - name: Add vcpkg to PATH
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
@@ -86,26 +105,51 @@ jobs:
           $env:VCPKG_INSTALLATION_ROOT | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Rust toolchain
+        if: runner.os == 'Windows'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
+
+      - name: Install Rust toolchain
+        if: runner.os != 'Windows'
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build Rust CLI
-        run: cargo build --release --verbose --target x86_64-pc-windows-msvc
+        if: runner.os == 'Windows'
+        run: cargo build --release --verbose --target ${{ matrix.target }}
+
+      - name: Build Rust CLI
+        if: runner.os != 'Windows'
+        run: cargo build --release --verbose
 
       - name: Stage artifact
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/x86_64-pc-windows-msvc/release/winget-source-builder.exe" "dist/winget-source-builder.exe"
-          Copy-Item "target/x86_64-pc-windows-msvc/release/WinGetUtil.dll" "dist/WinGetUtil.dll"
+          Copy-Item "target/${{ matrix.target }}/release/winget-source-builder.exe" "dist/winget-source-builder.exe"
+          Copy-Item "target/${{ matrix.target }}/release/WinGetUtil.dll" "dist/WinGetUtil.dll"
+
+      - name: Stage artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/release/winget-source-builder" "dist/winget-source-builder"
+          chmod +x "dist/winget-source-builder"
+          if [[ -f "target/release/makemsix" ]]; then
+            cp "target/release/makemsix" "dist/makemsix"
+            chmod +x "dist/makemsix"
+          fi
+          find "target/release" -maxdepth 1 \( -name 'libmsix*.so*' -o -name 'libmsix*.dylib*' \) -type f -exec cp {} dist/ \;
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: winget-source-builder-windows-x64
+          name: ${{ matrix.artifact_name }}
           path: dist
           if-no-files-found: error

@@ -9,13 +9,9 @@ const WINGETUTIL_DLL_FILE_NAME: &str = "WinGetUtil.dll";
 const PACKAGING_RELATIVE_DIR: &str = "packaging";
 const APPX_MANIFEST_RELATIVE_PATH: &str = "packaging/AppxManifest.xml";
 #[cfg(windows)]
-const PACKAGE_OUTPUT_NAME: &str = "source2.msix";
-#[cfg(windows)]
 const MISSING_PACKAGE_HRESULT: u32 = 0x8A15004D;
-#[cfg(windows)]
-const V2_MAJOR_VERSION: u32 = 2;
-#[cfg(windows)]
-const V2_MINOR_VERSION: u32 = 0;
+
+use crate::CatalogFormat;
 
 #[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone)]
@@ -25,6 +21,9 @@ pub struct AdapterRequest {
     pub publish_db_path: String,
     pub stage_root: String,
     pub package_update_tracking_base_time: i64,
+    pub schema_major_version: u32,
+    pub schema_minor_version: u32,
+    pub package_output_name: String,
     pub operations: Vec<AdapterOperation>,
 }
 
@@ -58,6 +57,21 @@ pub fn run_adapter(
         let writer = windows::WinGetWriter::load(&winget_util_path)?;
         writer.run(request, stage_root, &msix_resources_root)
     }
+}
+
+pub fn package_published_index(
+    workspace_root: &Path,
+    stage_root: &Path,
+    publish_db_path: &Path,
+    format: CatalogFormat,
+) -> Result<()> {
+    let msix_resources_root = resolve_msix_resources_root(workspace_root)?;
+    package_source_msix(
+        stage_root,
+        publish_db_path,
+        &msix_resources_root,
+        format.package_file_name(),
+    )
 }
 
 pub fn absolute_string(path: &Path) -> String {
@@ -95,7 +109,7 @@ pub fn windows_build_dependencies_available(workspace_root: &Path) -> bool {
     #[cfg(windows)]
     {
         let _ = workspace_root;
-        resolve_existing_win_get_util_path().is_some() && resolve_makeappx_path().is_some()
+        resolve_existing_win_get_util_path().is_some() && resolve_msix_packager().is_some()
     }
 
     #[cfg(not(windows))]
@@ -103,6 +117,12 @@ pub fn windows_build_dependencies_available(workspace_root: &Path) -> bool {
         let _ = workspace_root;
         false
     }
+}
+
+#[cfg(test)]
+pub fn msix_packaging_available(workspace_root: &Path) -> bool {
+    let _ = workspace_root;
+    resolve_msix_packager().is_some()
 }
 
 fn workspace_root_candidates(repo_root_hint: Option<&Path>) -> Result<Vec<PathBuf>> {
@@ -166,13 +186,9 @@ fn looks_like_workspace_root(workspace_root: &Path) -> bool {
 
 #[cfg(windows)]
 fn resolve_existing_win_get_util_path() -> Option<PathBuf> {
-    let current_exe = env::current_exe().ok()?;
-    let executable_dir = current_exe.parent()?;
-    let candidate = executable_dir.join(WINGETUTIL_DLL_FILE_NAME);
-    candidate.is_file().then_some(candidate)
+    resolve_side_by_side_binary(&[WINGETUTIL_DLL_FILE_NAME])
 }
 
-#[cfg(windows)]
 fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
     let resource_root = workspace_root.join(PACKAGING_RELATIVE_DIR);
     let manifest_path = workspace_root.join(APPX_MANIFEST_RELATIVE_PATH);
@@ -227,6 +243,70 @@ fn resolve_makeappx_path() -> Option<PathBuf> {
     candidates.into_iter().next()
 }
 
+fn resolve_makemsix_path() -> Option<PathBuf> {
+    if let Some(side_by_side) = resolve_side_by_side_binary(&["makemsix", "makemsix.exe"]) {
+        return Some(side_by_side);
+    }
+
+    if let Ok(env_override) = env::var("MAKEMSIX_EXE") {
+        let env_override = PathBuf::from(env_override);
+        if env_override.is_file() {
+            return Some(env_override);
+        }
+    }
+
+    find_in_path(&["makemsix", "makemsix.exe"])
+}
+
+fn resolve_side_by_side_binary(file_names: &[&str]) -> Option<PathBuf> {
+    let current_exe = env::current_exe().ok()?;
+    let mut roots = Vec::new();
+
+    if let Some(directory) = current_exe.parent() {
+        roots.push(directory.to_path_buf());
+        if let Some(parent) = directory.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+
+    for root in roots {
+        for file_name in file_names {
+            let candidate = root.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_in_path(candidates: &[&str]) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .flat_map(|directory| {
+            candidates
+                .iter()
+                .map(move |candidate| directory.join(candidate))
+        })
+        .find(|candidate| candidate.is_file())
+}
+
+#[derive(Debug, Clone)]
+enum MsixPackager {
+    MakeAppx(PathBuf),
+    MakeMsix(PathBuf),
+}
+
+fn resolve_msix_packager() -> Option<MsixPackager> {
+    #[cfg(windows)]
+    if let Some(makeappx) = resolve_makeappx_path() {
+        return Some(MsixPackager::MakeAppx(makeappx));
+    }
+
+    resolve_makemsix_path().map(MsixPackager::MakeMsix)
+}
+
 fn normalize_path(path: PathBuf) -> PathBuf {
     if !cfg!(windows) {
         return path;
@@ -240,25 +320,182 @@ fn normalize_path(path: PathBuf) -> PathBuf {
     path
 }
 
+fn package_source_msix(
+    stage_root: &Path,
+    publish_db_path: &Path,
+    msix_resources_root: &Path,
+    package_output_name: &str,
+) -> Result<()> {
+    use std::fs;
+    use std::process::Command;
+
+    use anyhow::{Context, anyhow, ensure};
+    use walkdir::WalkDir;
+
+    let temp_dir = stage_root.join("_msix");
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir)
+            .with_context(|| format!("failed to remove {}", temp_dir.display()))?;
+    }
+
+    let source_manifest_path = msix_resources_root.join("AppxManifest.xml");
+    let source_assets_dir = msix_resources_root.join("Assets");
+    ensure!(
+        source_manifest_path.is_file(),
+        "MSIX AppxManifest.xml was not found at {}",
+        source_manifest_path.display()
+    );
+    ensure!(
+        source_assets_dir.is_dir(),
+        "MSIX assets directory was not found at {}",
+        source_assets_dir.display()
+    );
+
+    let public_dir = temp_dir.join("Public");
+    fs::create_dir_all(&public_dir)
+        .with_context(|| format!("failed to create {}", public_dir.display()))?;
+    fs::copy(publish_db_path, public_dir.join("index.db")).with_context(|| {
+        format!(
+            "failed to copy {} to {}",
+            publish_db_path.display(),
+            public_dir.join("index.db").display()
+        )
+    })?;
+
+    let appx_manifest_path = temp_dir.join("AppxManifest.xml");
+    fs::copy(&source_manifest_path, &appx_manifest_path).with_context(|| {
+        format!(
+            "failed to copy {} to {}",
+            source_manifest_path.display(),
+            appx_manifest_path.display()
+        )
+    })?;
+
+    let mut resource_paths = WalkDir::new(&source_assets_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect::<Vec<_>>();
+    resource_paths.sort();
+
+    for source_asset_path in resource_paths {
+        let relative_path = source_asset_path
+            .strip_prefix(msix_resources_root)
+            .with_context(|| {
+                format!(
+                    "failed to derive relative path for {} within {}",
+                    source_asset_path.display(),
+                    msix_resources_root.display()
+                )
+            })?;
+        let staged_asset_path = temp_dir.join(relative_path);
+        if let Some(parent) = staged_asset_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        fs::copy(&source_asset_path, &staged_asset_path).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                source_asset_path.display(),
+                staged_asset_path.display()
+            )
+        })?;
+    }
+
+    let output_package = stage_root.join(package_output_name);
+    if output_package.exists() {
+        fs::remove_file(&output_package)
+            .with_context(|| format!("failed to remove {}", output_package.display()))?;
+    }
+
+    let packager = resolve_msix_packager()
+        .ok_or_else(|| anyhow!("neither makeappx nor makemsix was found for MSIX packaging"))?;
+    let output = match &packager {
+        MsixPackager::MakeAppx(path) => Command::new(path)
+            .arg("pack")
+            .arg("/o")
+            .arg("/nv")
+            .arg("/d")
+            .arg(&temp_dir)
+            .arg("/p")
+            .arg(&output_package)
+            .output()
+            .with_context(|| format!("failed to start {}", path.display()))?,
+        MsixPackager::MakeMsix(path) => {
+            let mut command = Command::new(path);
+            command
+                .arg("pack")
+                .arg("-d")
+                .arg(&temp_dir)
+                .arg("-p")
+                .arg(&output_package);
+
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if let Some(runtime_dir) = path.parent() {
+                #[cfg(target_os = "linux")]
+                prepend_library_path(&mut command, "LD_LIBRARY_PATH", runtime_dir);
+
+                #[cfg(target_os = "macos")]
+                prepend_library_path(&mut command, "DYLD_LIBRARY_PATH", runtime_dir);
+            }
+
+            command
+                .output()
+                .with_context(|| format!("failed to start {}", path.display()))?
+        }
+    };
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let details = [stdout, stderr]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool = match packager {
+            MsixPackager::MakeAppx(ref path) | MsixPackager::MakeMsix(ref path) => {
+                path.display().to_string()
+            }
+        };
+        bail!(
+            "{tool} failed for {}{}\n{}",
+            output_package.display(),
+            if details.is_empty() { "" } else { ":" },
+            details
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prepend_library_path(command: &mut std::process::Command, key: &str, directory: &Path) {
+    let mut paths = vec![directory.to_path_buf()];
+    if let Some(existing) = env::var_os(key) {
+        paths.extend(env::split_paths(&existing));
+    }
+    if let Ok(joined) = env::join_paths(paths) {
+        command.env(key, joined);
+    }
+}
+
 #[cfg(windows)]
 mod windows {
     use std::ffi::{OsStr, c_void};
     use std::fs;
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
     use std::ptr;
     use std::rc::Rc;
 
-    use anyhow::{Context, Result, anyhow, bail, ensure};
+    use anyhow::{Context, Result, bail};
     use libloading::Library;
     use log::{debug, warn};
-    use walkdir::WalkDir;
 
-    use super::{
-        AdapterOperation, AdapterRequest, MISSING_PACKAGE_HRESULT, PACKAGE_OUTPUT_NAME,
-        V2_MAJOR_VERSION, V2_MINOR_VERSION, resolve_makeappx_path,
-    };
+    use super::{AdapterOperation, AdapterRequest, MISSING_PACKAGE_HRESULT};
 
     type IndexHandle = *mut c_void;
     type HResult = i32;
@@ -326,7 +563,12 @@ mod windows {
             let mut candidate = if candidate_db_path.is_file() {
                 WinGetIndex::open(self.library.clone(), &candidate_db_path)?
             } else {
-                WinGetIndex::create_v2(self.library.clone(), &candidate_db_path)?
+                WinGetIndex::create(
+                    self.library.clone(),
+                    &candidate_db_path,
+                    request.schema_major_version,
+                    request.schema_minor_version,
+                )?
             };
 
             self.apply_operations(&mut candidate, &request.operations)?;
@@ -362,7 +604,12 @@ mod windows {
             publish.prepare_for_packaging()?;
             drop(publish);
 
-            package_source_msix(stage_root, &publish_db_path, msix_resources_root)?;
+            super::package_source_msix(
+                stage_root,
+                &publish_db_path,
+                msix_resources_root,
+                &request.package_output_name,
+            )?;
             Ok(())
         }
 
@@ -504,16 +751,16 @@ mod windows {
     }
 
     impl WinGetIndex {
-        fn create_v2(library: Rc<WinGetLibrary>, db_path: &Path) -> Result<Self> {
+        fn create(
+            library: Rc<WinGetLibrary>,
+            db_path: &Path,
+            major_version: u32,
+            minor_version: u32,
+        ) -> Result<Self> {
             let mut handle = ptr::null_mut();
             let db_path = to_wide(db_path.as_os_str());
             let hr = unsafe {
-                (library.create)(
-                    db_path.as_ptr(),
-                    V2_MAJOR_VERSION,
-                    V2_MINOR_VERSION,
-                    &mut handle,
-                )
+                (library.create)(db_path.as_ptr(), major_version, minor_version, &mut handle)
             };
             check_hresult(hr, || {
                 format!("failed to create {}", db_path_display(db_path.as_ptr()))
@@ -640,129 +887,5 @@ mod windows {
             }
             String::from_utf16_lossy(std::slice::from_raw_parts(value, len))
         }
-    }
-
-    fn package_source_msix(
-        stage_root: &Path,
-        publish_db_path: &Path,
-        msix_resources_root: &Path,
-    ) -> Result<()> {
-        let temp_dir = stage_root.join("_msix");
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)
-                .with_context(|| format!("failed to remove {}", temp_dir.display()))?;
-        }
-
-        let source_manifest_path = msix_resources_root.join("AppxManifest.xml");
-        let source_assets_dir = msix_resources_root.join("Assets");
-        ensure!(
-            source_manifest_path.is_file(),
-            "MSIX AppxManifest.xml was not found at {}",
-            source_manifest_path.display()
-        );
-        ensure!(
-            source_assets_dir.is_dir(),
-            "MSIX assets directory was not found at {}",
-            source_assets_dir.display()
-        );
-
-        let assets_dir = temp_dir.join("Assets");
-        fs::create_dir_all(&assets_dir)
-            .with_context(|| format!("failed to create {}", assets_dir.display()))?;
-
-        let appx_manifest_path = temp_dir.join("AppxManifest.xml");
-        fs::copy(&source_manifest_path, &appx_manifest_path).with_context(|| {
-            format!(
-                "failed to copy {} to {}",
-                source_manifest_path.display(),
-                appx_manifest_path.display()
-            )
-        })?;
-
-        let mut mapping_lines = vec![
-            "[Files]".to_string(),
-            format!("\"{}\" \"Public\\index.db\"", publish_db_path.display()),
-            format!("\"{}\" \"AppxManifest.xml\"", appx_manifest_path.display()),
-        ];
-
-        let mut resource_paths = WalkDir::new(&source_assets_dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_type().is_file())
-            .map(|entry| entry.into_path())
-            .collect::<Vec<_>>();
-        resource_paths.sort();
-
-        for source_asset_path in resource_paths {
-            let relative_path = source_asset_path
-                .strip_prefix(msix_resources_root)
-                .with_context(|| {
-                    format!(
-                        "failed to derive relative path for {} within {}",
-                        source_asset_path.display(),
-                        msix_resources_root.display()
-                    )
-                })?;
-            let staged_asset_path = temp_dir.join(relative_path);
-            if let Some(parent) = staged_asset_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-            }
-            fs::copy(&source_asset_path, &staged_asset_path).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    source_asset_path.display(),
-                    staged_asset_path.display()
-                )
-            })?;
-            mapping_lines.push(format!(
-                "\"{}\" \"{}\"",
-                staged_asset_path.display(),
-                relative_path.display().to_string().replace('/', "\\")
-            ));
-        }
-
-        let mapping_file = temp_dir.join("MappingFile.txt");
-        let mapping_contents = mapping_lines.join("\n") + "\n";
-        fs::write(&mapping_file, mapping_contents.as_bytes())
-            .with_context(|| format!("failed to write {}", mapping_file.display()))?;
-
-        let output_package = stage_root.join(PACKAGE_OUTPUT_NAME);
-        if output_package.exists() {
-            fs::remove_file(&output_package)
-                .with_context(|| format!("failed to remove {}", output_package.display()))?;
-        }
-
-        let makeappx = resolve_makeappx_path()
-            .ok_or_else(|| anyhow!("makeappx.exe was not found in the Windows SDK"))?;
-        let output = Command::new(&makeappx)
-            .arg("pack")
-            .arg("/o")
-            .arg("/nv")
-            .arg("/f")
-            .arg(&mapping_file)
-            .arg("/p")
-            .arg(&output_package)
-            .output()
-            .with_context(|| format!("failed to start {}", makeappx.display()))?;
-
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let details = [stdout, stderr]
-                .into_iter()
-                .filter(|value| !value.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            bail!(
-                "makeappx failed for {}{}\n{}",
-                output_package.display(),
-                if details.is_empty() { "" } else { ":" },
-                details
-            );
-        }
-
-        Ok(())
     }
 }

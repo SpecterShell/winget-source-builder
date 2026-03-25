@@ -25,6 +25,36 @@ impl Messages {
         .to_string()
     }
 
+    pub(crate) fn index_started(&self, repo: &Path, out: &Path) -> String {
+        t!(
+            "index.started",
+            locale = self.locale.as_str(),
+            repo = display_path(repo),
+            out = display_path(out)
+        )
+        .to_string()
+    }
+
+    pub(crate) fn validation_started(&self, repo: &Path, state: &Path) -> String {
+        t!(
+            "validation.started",
+            locale = self.locale.as_str(),
+            repo = display_path(repo),
+            state = display_path(state)
+        )
+        .to_string()
+    }
+
+    pub(crate) fn validation_completed(&self, path: &Path, count: usize) -> String {
+        t!(
+            "validation.completed",
+            locale = self.locale.as_str(),
+            path = display_path(path),
+            count = count
+        )
+        .to_string()
+    }
+
     pub(crate) fn scanning_repository(&self, repo: &Path) -> String {
         t!(
             "build.scanning_repository",
@@ -59,8 +89,22 @@ impl Messages {
         t!("progress.staging_manifests", locale = self.locale.as_str()).to_string()
     }
 
-    pub(crate) fn progress_running_adapter(&self) -> String {
-        t!("progress.running_adapter", locale = self.locale.as_str()).to_string()
+    pub(crate) fn progress_running_adapter(&self, package_name: &str) -> String {
+        t!(
+            "progress.running_adapter",
+            locale = self.locale.as_str(),
+            package_name = package_name
+        )
+        .to_string()
+    }
+
+    pub(crate) fn progress_running_rust_backend(&self, package_name: &str) -> String {
+        t!(
+            "progress.running_rust_backend",
+            locale = self.locale.as_str(),
+            package_name = package_name
+        )
+        .to_string()
     }
 
     pub(crate) fn progress_committing_output(&self) -> String {
@@ -90,8 +134,22 @@ impl Messages {
         .to_string()
     }
 
-    pub(crate) fn running_adapter(&self) -> String {
-        t!("build.running_adapter", locale = self.locale.as_str()).to_string()
+    pub(crate) fn running_adapter(&self, package_name: &str) -> String {
+        t!(
+            "build.running_adapter",
+            locale = self.locale.as_str(),
+            package_name = package_name
+        )
+        .to_string()
+    }
+
+    pub(crate) fn running_rust_backend(&self, package_name: &str) -> String {
+        t!(
+            "build.running_rust_backend",
+            locale = self.locale.as_str(),
+            package_name = package_name
+        )
+        .to_string()
     }
 
     pub(crate) fn committing_output(&self, out: &Path) -> String {

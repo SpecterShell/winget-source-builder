@@ -4,9 +4,10 @@
 
 The project is implemented as a Rust CLI with a thin native interop layer inside the same binary.
 
-- Rust handles scanning, hashing, manifest merge/parsing, canonicalization, diffing, state management, publish planning, WinGetUtil interop, and `source2.msix` creation.
+- Rust handles scanning, hashing, manifest merge/parsing, canonicalization, diffing, state management, publish planning, backend dispatch, WinGetUtil interop, and catalog packaging.
 - `WinGetUtil.dll` is still the compatibility backend for the mutable writer, but it is loaded directly from Rust at runtime.
 - Static MSIX resources live in the source/template repository under `packaging/`, not in this builder repository.
+- Non-Windows packaging uses `makemsix` built from the bundled `msix-packaging` submodule.
 
 ## Build Pipeline
 
@@ -17,9 +18,9 @@ The project is implemented as a Rust CLI with a thin native interop layer inside
    - `version_installer_sha256`
    - `published_manifest_sha256`
 4. Diff dirty versions against the last successful state.
-5. Regenerate only affected package sidecars.
-6. Apply add/remove operations to the WinGetUtil mutable database.
-7. Stage a publish tree and emit `source2.msix`.
+5. Regenerate only affected package sidecars when the selected format needs them.
+6. Apply incremental writer operations or build the published DB directly, depending on the selected backend.
+7. Stage a publish tree and emit `source.msix` or `source2.msix`.
 8. Commit the staged output and state only after the build succeeds.
 
 ## State Store
@@ -46,10 +47,10 @@ This makes the builder independent from Git commit topology. A run compares curr
 
 ## Output Contract
 
-V1 publishes:
+The output contract is format-dependent:
 
-- `source2.msix`
-- `packages/.../versionData.mszyml`
+- `v1`: `source.msix` plus hosted merged manifests
+- `v2`: `source2.msix`, `packages/.../versionData.mszyml`, and hosted merged manifests
 - `manifests/...`
 
 The core keeps catalog-format handling behind an abstraction so future source formats can be added as new writer implementations.

@@ -35,6 +35,40 @@ function Resolve-RequiredPath {
     return Normalize-PathString $resolved.Path
 }
 
+function Get-VcpkgTriplet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Platform,
+        [Parameter(Mandatory = $true)][string]$Configuration
+    )
+
+    $platformTriplet = switch ($Platform.ToLowerInvariant()) {
+        "win32" { "x86" }
+        default { $Platform.ToLowerInvariant() }
+    }
+
+    $triplet = switch ($Configuration.ToLowerInvariant()) {
+        "debug" { $platformTriplet }
+        "release" { "$platformTriplet-release" }
+        "releasestatic" { "$platformTriplet-release-static" }
+        "fuzzing" { "$platformTriplet-fuzzing" }
+        default { "$platformTriplet-$($Configuration.ToLowerInvariant())" }
+    }
+
+    return $triplet
+}
+
+function Get-HostPlatform {
+    if ($env:PROCESSOR_ARCHITECTURE) {
+        switch ($env:PROCESSOR_ARCHITECTURE.ToUpperInvariant()) {
+            "AMD64" { return "x64" }
+            "ARM64" { return "arm64" }
+            "X86" { return "x86" }
+        }
+    }
+
+    return "x64"
+}
+
 $wingetCliRoot = Resolve-RequiredPath $WingetCliRoot
 $solutionPath = Join-Path $wingetCliRoot "src\AppInstallerCLI.sln"
 if (-not (Test-Path -LiteralPath $solutionPath)) {
@@ -55,7 +89,6 @@ $visualStudioPath = $visualStudioPath.Trim()
 $vsDevCmd = Join-Path $visualStudioPath "Common7\Tools\VsDevCmd.bat"
 $vcvarsall = Join-Path $visualStudioPath "VC\Auxiliary\Build\vcvarsall.bat"
 $msbuild = Join-Path $visualStudioPath "MSBuild\Current\Bin\MSBuild.exe"
-$nuget = Join-Path $visualStudioPath "Common7\IDE\CommonExtensions\Microsoft\NuGet\NuGet.exe"
 
 if (-not (Test-Path -LiteralPath $vsDevCmd) -and -not (Test-Path -LiteralPath $vcvarsall)) {
     throw "Neither VsDevCmd.bat nor vcvarsall.bat was found under $visualStudioPath"
@@ -65,22 +98,33 @@ if (-not (Test-Path -LiteralPath $msbuild)) {
     throw "MSBuild.exe was not found at $msbuild"
 }
 
-if (-not (Test-Path -LiteralPath $nuget)) {
-    $nugetCommand = Get-Command nuget -ErrorAction SilentlyContinue
-    if ($null -ne $nugetCommand) {
-        $nuget = $nugetCommand.Source
-    }
+$hostPlatform = Get-HostPlatform
+$vcvarsPlatform = if ($Platform.ToLowerInvariant() -eq $hostPlatform.ToLowerInvariant()) {
+    $Platform
+} else {
+    "$hostPlatform`_$Platform"
 }
 
 $developerEnvironment = if (Test-Path -LiteralPath $vsDevCmd) {
-    "`"$vsDevCmd`" -arch=$Platform -host_arch=$Platform"
+    "`"$vsDevCmd`" -arch=$Platform -host_arch=$hostPlatform"
 } else {
-    "`"$vcvarsall`" $Platform"
+    "`"$vcvarsall`" $vcvarsPlatform"
 }
 
+$vcpkgPath = $null
 $vcpkgCommand = Get-Command vcpkg -ErrorAction SilentlyContinue
 if ($null -ne $vcpkgCommand) {
-    & $vcpkgCommand.Source integrate install
+    $vcpkgPath = $vcpkgCommand.Source
+}
+elseif ($env:VCPKG_INSTALLATION_ROOT) {
+    $candidate = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
+    if (Test-Path -LiteralPath $candidate) {
+        $vcpkgPath = $candidate
+    }
+}
+
+if ($null -ne $vcpkgPath) {
+    & $vcpkgPath integrate install
     if ($LASTEXITCODE -ne 0) {
         throw "vcpkg integrate install failed. See winget-cli\doc\Developing.md for the required developer setup."
     }
@@ -89,15 +133,11 @@ else {
     Write-Warning "vcpkg was not found on PATH. If WinGetUtil build fails, follow winget-cli\doc\Developing.md and run 'vcpkg integrate install' from a Developer PowerShell prompt."
 }
 
-if (Test-Path -LiteralPath $nuget) {
-    & $nuget restore $solutionPath -NonInteractive
-    if ($LASTEXITCODE -ne 0) {
-        throw "nuget restore failed for $solutionPath"
-    }
-}
-else {
-    Write-Warning "nuget.exe was not found. If package restore fails, follow winget-cli\doc\Developing.md and install the full Visual Studio/NuGet workload."
-}
+$vcpkgTriplet = Get-VcpkgTriplet -Platform $Platform -Configuration $Configuration
+$vcpkgInstalledDir = Join-Path $wingetCliRoot "src\vcpkg_installed"
+$tripletFile = Join-Path $vcpkgInstalledDir ".solution-triplet"
+New-Item -ItemType Directory -Force -Path $vcpkgInstalledDir | Out-Null
+Set-Content -LiteralPath $tripletFile -Value $vcpkgTriplet -NoNewline
 
 $buildCommand = @(
     $developerEnvironment,
@@ -110,7 +150,8 @@ $buildCommand = @(
     "/verbosity:minimal",
     "/t:WinGetUtil",
     "/p:Configuration=$Configuration",
-    "/p:Platform=$Platform"
+    "/p:Platform=$Platform",
+    "/p:VcpkgTriplet=$vcpkgTriplet"
 ) -join " "
 
 $wingetUtilPath = Join-Path $wingetCliRoot "src\$Platform\$Configuration\WinGetUtil\WinGetUtil.dll"

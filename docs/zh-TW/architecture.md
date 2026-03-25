@@ -4,9 +4,10 @@
 
 專案實作為一個 Rust CLI，並在同一個二進位內保留一層很薄的原生互操作邊界。
 
-- Rust 負責掃描、雜湊、manifest 合併/解析、正規化、差異計算、狀態管理、發佈規劃、WinGetUtil 互操作，以及 `source2.msix` 封裝。
+- Rust 負責掃描、雜湊、manifest 合併/解析、正規化、差異計算、狀態管理、發佈規劃、backend 分發、WinGetUtil 互操作，以及 catalog 封裝。
 - `WinGetUtil.dll` 仍然是可變索引寫入的相容後端，但現在由 Rust 在執行期直接載入。
 - MSIX 靜態資源放在來源模板倉庫的 `packaging/` 下，而不是放在本建置器倉庫裡。
+- 非 Windows 的封裝路徑透過倉庫內建 `msix-packaging` 子模組建出的 `makemsix` 完成。
 
 ## 建置流程
 
@@ -17,9 +18,9 @@
    - `version_installer_sha256`
    - `published_manifest_sha256`
 4. 將髒版本與上一次成功狀態做差異比對。
-5. 只重建受影響套件的 sidecar。
-6. 對 WinGetUtil 的可變資料庫套用 add/remove 操作。
-7. 產生 staging 發佈樹並輸出 `source2.msix`。
+5. 只在所選格式需要時重建受影響套件的 sidecar。
+6. 根據所選 backend，執行增量 writer 操作或直接產生發佈資料庫。
+7. 產生 staging 發佈樹並輸出 `source.msix` 或 `source2.msix`。
 8. 只有整個流程成功後，才提交新的輸出與狀態。
 
 ## 狀態庫
@@ -46,10 +47,10 @@
 
 ## 輸出契約
 
-V1 會發佈：
+輸出契約取決於所選格式：
 
-- `source2.msix`
-- `packages/.../versionData.mszyml`
+- `v1`：`source.msix` 加託管合併 manifest
+- `v2`：`source2.msix`、`packages/.../versionData.mszyml` 以及託管合併 manifest
 - `manifests/...`
 
 核心層已將 catalog 格式處理放在抽象之後，未來若有新的來源格式，可以透過新增 writer 來支援。

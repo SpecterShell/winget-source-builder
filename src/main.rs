@@ -1,9 +1,13 @@
 mod adapter;
+mod backend;
 mod builder;
 mod i18n;
 mod manifest;
+#[cfg(any(not(windows), test))]
+mod mszip;
 mod progress;
 mod state;
+mod version;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -40,6 +44,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Build(BuildArgs),
+    QueueValidation(QueueValidationArgs),
+    BuildIndex(BuildArgs),
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -55,11 +61,50 @@ pub(crate) struct BuildArgs {
 
     #[arg(long, default_value = "v2")]
     pub(crate) format: CatalogFormat,
+
+    #[arg(long, default_value = "wingetutil")]
+    pub(crate) backend: BackendKind,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub(crate) struct QueueValidationArgs {
+    #[arg(long)]
+    pub(crate) repo: PathBuf,
+
+    #[arg(long)]
+    pub(crate) state: PathBuf,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
 pub(crate) enum CatalogFormat {
+    V1,
     V2,
+}
+
+impl CatalogFormat {
+    pub(crate) const fn package_file_name(self) -> &'static str {
+        match self {
+            Self::V1 => "source.msix",
+            Self::V2 => "source2.msix",
+        }
+    }
+
+    pub(crate) const fn wingetutil_schema_version(self) -> (u32, u32) {
+        match self {
+            Self::V1 => (1, u32::MAX),
+            Self::V2 => (2, 0),
+        }
+    }
+
+    pub(crate) const fn uses_package_sidecars(self) -> bool {
+        matches!(self, Self::V2)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub(crate) enum BackendKind {
+    Wingetutil,
+    Rust,
 }
 
 fn main() -> ExitCode {
@@ -69,6 +114,8 @@ fn main() -> ExitCode {
 
     let result = match cli.command {
         Command::Build(args) => builder::run_build(args, messages.clone()),
+        Command::QueueValidation(args) => builder::run_queue_validation(args, messages.clone()),
+        Command::BuildIndex(args) => builder::run_build_index(args, messages.clone()),
     };
 
     match result {

@@ -1,3 +1,6 @@
 [submodule "winget-cli"]
 	path = winget-cli
 	url = https://github.com/microsoft/winget-cli.git
+[submodule "msix-packaging"]
+	path = msix-packaging
+	url = https://github.com/microsoft/msix-packaging.git
