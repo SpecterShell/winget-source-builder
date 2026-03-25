@@ -1,15 +1,23 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+#[cfg(windows)]
+use anyhow::anyhow;
+use anyhow::{Result, bail};
+#[cfg(windows)]
 const WINGETUTIL_DLL_FILE_NAME: &str = "WinGetUtil.dll";
 const PACKAGING_MSIX_RELATIVE_DIR: &str = "packaging/msix";
 const APPX_MANIFEST_RELATIVE_PATH: &str = "packaging/msix/AppxManifest.xml";
+#[cfg(windows)]
 const PACKAGE_OUTPUT_NAME: &str = "source2.msix";
+#[cfg(windows)]
 const MISSING_PACKAGE_HRESULT: u32 = 0x8A15004D;
+#[cfg(windows)]
 const V2_MAJOR_VERSION: u32 = 2;
+#[cfg(windows)]
 const V2_MINOR_VERSION: u32 = 0;
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct AdapterRequest {
     pub mutable_db_path: String,
@@ -20,6 +28,7 @@ pub struct AdapterRequest {
     pub operations: Vec<AdapterOperation>,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct AdapterOperation {
     pub kind: String,
@@ -83,10 +92,17 @@ pub fn resolve_workspace_root(repo_root_hint: Option<&Path>) -> Result<PathBuf> 
 
 #[cfg(test)]
 pub fn windows_build_dependencies_available(workspace_root: &Path) -> bool {
-    let _ = workspace_root;
-    cfg!(windows)
-        && resolve_existing_win_get_util_path().is_some()
-        && resolve_makeappx_path().is_some()
+    #[cfg(windows)]
+    {
+        let _ = workspace_root;
+        resolve_existing_win_get_util_path().is_some() && resolve_makeappx_path().is_some()
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = workspace_root;
+        false
+    }
 }
 
 fn workspace_root_candidates(repo_root_hint: Option<&Path>) -> Result<Vec<PathBuf>> {
@@ -148,6 +164,7 @@ fn looks_like_workspace_root(workspace_root: &Path) -> bool {
         || workspace_root.join(PACKAGING_MSIX_RELATIVE_DIR).is_dir()
 }
 
+#[cfg(windows)]
 fn resolve_existing_win_get_util_path() -> Option<PathBuf> {
     let current_exe = env::current_exe().ok()?;
     let executable_dir = current_exe.parent()?;
@@ -155,6 +172,7 @@ fn resolve_existing_win_get_util_path() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+#[cfg(windows)]
 fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
     let resource_root = workspace_root.join(PACKAGING_MSIX_RELATIVE_DIR);
     let manifest_path = workspace_root.join(APPX_MANIFEST_RELATIVE_PATH);
@@ -169,6 +187,7 @@ fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
     Ok(resource_root)
 }
 
+#[cfg(windows)]
 fn resolve_makeappx_path() -> Option<PathBuf> {
     if let Ok(env_override) = env::var("MAKEAPPX_EXE") {
         let env_override = PathBuf::from(env_override);

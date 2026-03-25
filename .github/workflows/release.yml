@@ -43,20 +43,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item "target/x86_64-pc-windows-msvc/release/winget-source-builder.exe" "dist/winget-source-builder.exe"
           Copy-Item "target/x86_64-pc-windows-msvc/release/WinGetUtil.dll" "dist/WinGetUtil.dll"
-          Copy-Item "LICENSE" "dist/LICENSE"
-          Copy-Item "AGENTS.md" "dist/AGENTS.md"
-          Copy-Item "README.md" "dist/README.md"
-          Copy-Item "README.zh-CN.md" "dist/README.zh-CN.md"
-          Copy-Item "README.zh-TW.md" "dist/README.zh-TW.md"
-          Copy-Item "docs" "dist/docs" -Recurse
-          Copy-Item "action.yml" "dist/action.yml"
           Compress-Archive -Path "dist/*" -DestinationPath "winget-source-builder-windows-x64.zip" -Force
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: winget-source-builder-windows-x64
-          path: winget-source-builder-windows-x64.zip
+          path: dist
           if-no-files-found: error
 
       - name: Upload release asset
