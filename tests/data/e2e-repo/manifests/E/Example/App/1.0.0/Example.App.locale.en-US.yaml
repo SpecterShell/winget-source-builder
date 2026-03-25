@@ -1,0 +1,8 @@
+PackageIdentifier: Example.App
+PackageVersion: 1.0.0
+PackageLocale: en-US
+PackageName: Example App
+Publisher: Example Inc
+ShortDescription: Example description.
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

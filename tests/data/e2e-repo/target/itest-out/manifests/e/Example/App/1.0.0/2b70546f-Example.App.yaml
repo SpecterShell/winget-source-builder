@@ -1,0 +1,13 @@
+InstallerType: exe
+Installers:
+- Architecture: x64
+  InstallerSha256: 0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF
+  InstallerUrl: https://example.invalid/installer.exe
+ManifestType: merged
+ManifestVersion: 1.9.0
+PackageIdentifier: Example.App
+PackageLocale: en-US
+PackageName: Example App
+PackageVersion: 1.0.0
+Publisher: Example Inc
+ShortDescription: Example description.

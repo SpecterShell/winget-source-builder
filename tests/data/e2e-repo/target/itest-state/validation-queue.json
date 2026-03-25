@@ -1,0 +1,9 @@
+[
+  {
+    "package_id": "Example.App",
+    "package_version": "1.0.0",
+    "channel": "",
+    "version_installer_sha256": "b5bfe6e39eaeac422b7237ac2178df755ed588a9ed70da5b955d2d63025ca90e",
+    "reason": "added"
+  }
+]
