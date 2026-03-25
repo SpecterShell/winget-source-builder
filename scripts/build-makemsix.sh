@@ -5,6 +5,39 @@ msix_packaging_root=""
 destination=""
 configuration="MinSizeRel"
 
+detect_build_jobs() {
+  if [[ -n "${MAKEMSIX_BUILD_JOBS:-}" ]]; then
+    echo "$MAKEMSIX_BUILD_JOBS"
+    return
+  fi
+
+  if [[ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
+    echo "$CMAKE_BUILD_PARALLEL_LEVEL"
+    return
+  fi
+
+  local jobs="2"
+  if command -v nproc >/dev/null 2>&1; then
+    jobs="$(nproc)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    jobs="$(sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+  fi
+
+  if [[ "$jobs" =~ ^[0-9]+$ ]]; then
+    if [[ "$(uname -s)" == "Darwin" && "$jobs" -gt 4 ]]; then
+      jobs="4"
+    elif [[ "$jobs" -gt 8 ]]; then
+      jobs="8"
+    elif [[ "$jobs" -lt 1 ]]; then
+      jobs="1"
+    fi
+  else
+    jobs="2"
+  fi
+
+  echo "$jobs"
+}
+
 usage() {
   cat <<'EOF'
 usage: build-makemsix.sh --msix-packaging-root <path> --destination <path> [--configuration <name>]
@@ -61,6 +94,7 @@ mkdir -p "$build_dir"
 mkdir -p "$destination"
 
 platform="$(uname -s)"
+build_jobs="$(detect_build_jobs)"
 cmake_args=(
   -S "$msix_packaging_root"
   -B "$build_dir"
@@ -93,7 +127,7 @@ case "$platform" in
 esac
 
 cmake "${cmake_args[@]}"
-cmake --build "$build_dir" --target makemsix --config "$configuration" --parallel
+cmake --build "$build_dir" --target makemsix --config "$configuration" --parallel "$build_jobs"
 
 if [[ -f "$build_dir/bin/makemsix" ]]; then
   cp "$build_dir/bin/makemsix" "$destination/makemsix"

@@ -111,6 +111,19 @@ $developerEnvironment = if (Test-Path -LiteralPath $vsDevCmd) {
     "`"$vcvarsall`" $vcvarsPlatform"
 }
 
+$nugetPath = $null
+$nugetCommand = Get-Command nuget -ErrorAction SilentlyContinue
+if ($null -eq $nugetCommand) {
+    $nugetCommand = Get-Command nuget.exe -ErrorAction SilentlyContinue
+}
+
+if ($null -ne $nugetCommand) {
+    $nugetPath = $nugetCommand.Source
+}
+else {
+    throw "nuget.exe was not found on PATH"
+}
+
 $vcpkgPath = $null
 $vcpkgCommand = Get-Command vcpkg -ErrorAction SilentlyContinue
 if ($null -ne $vcpkgCommand) {
@@ -138,6 +151,27 @@ $vcpkgInstalledDir = Join-Path $wingetCliRoot "src\vcpkg_installed"
 $tripletFile = Join-Path $vcpkgInstalledDir ".solution-triplet"
 New-Item -ItemType Directory -Force -Path $vcpkgInstalledDir | Out-Null
 Set-Content -LiteralPath $tripletFile -Value $vcpkgTriplet -NoNewline
+
+$packagesDirectory = Join-Path $wingetCliRoot "src\packages"
+New-Item -ItemType Directory -Force -Path $packagesDirectory | Out-Null
+
+$restoreCommand = @(
+    $developerEnvironment,
+    "&&",
+    "`"$nugetPath`"",
+    "restore",
+    "`"$solutionPath`"",
+    "-NonInteractive",
+    "-Verbosity",
+    "quiet",
+    "-PackagesDirectory",
+    "`"$packagesDirectory`""
+) -join " "
+
+cmd.exe /c $restoreCommand
+if ($LASTEXITCODE -ne 0) {
+    throw "nuget restore failed for $solutionPath"
+}
 
 $buildCommand = @(
     $developerEnvironment,

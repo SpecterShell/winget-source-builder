@@ -1,8 +1,11 @@
 use anyhow::{Context, Result, ensure};
 use crc32fast::Hasher as Crc32Hasher;
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
+use flate2::{Compress, Compression, FlushCompress, Status};
+#[cfg(test)]
+use flate2::{Decompress, FlushDecompress};
 
 const HEADER_SIZE: usize = 24;
+#[cfg(test)]
 const CHUNK_HEADER_SIZE: usize = 6;
 const MAX_CHUNK_SIZE: usize = 1 << 15;
 const CHUNK_PADDING: u16 = 0x4B43;
@@ -34,6 +37,7 @@ pub(crate) fn compress_all(decompressed: &[u8]) -> Result<Vec<u8>> {
     Ok(compressed)
 }
 
+#[cfg(test)]
 pub(crate) fn decompress_all(compressed: &[u8]) -> Result<Vec<u8>> {
     ensure!(
         compressed.len() >= HEADER_SIZE,
@@ -145,6 +149,7 @@ fn compress_chunk(chunk: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
     Ok(compressed)
 }
 
+#[cfg(test)]
 fn decompress_chunk(chunk: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
     let mut decompressor = Decompress::new(false);
     if !dictionary.is_empty() {
@@ -201,14 +206,17 @@ fn header_crc(header: &[u8]) -> u8 {
     (crc.finalize() & 0xFF) as u8
 }
 
+#[cfg(test)]
 fn read_u16_le(bytes: &[u8]) -> u16 {
     u16::from_le_bytes(bytes.try_into().expect("slice size should be validated"))
 }
 
+#[cfg(test)]
 fn read_u32_le(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(bytes.try_into().expect("slice size should be validated"))
 }
 
+#[cfg(test)]
 fn read_u64_le(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(bytes.try_into().expect("slice size should be validated"))
 }

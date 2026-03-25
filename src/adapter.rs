@@ -294,8 +294,19 @@ fn find_in_path(candidates: &[&str]) -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 enum MsixPackager {
+    #[cfg(windows)]
     MakeAppx(PathBuf),
     MakeMsix(PathBuf),
+}
+
+impl MsixPackager {
+    fn path(&self) -> &Path {
+        match self {
+            #[cfg(windows)]
+            Self::MakeAppx(path) => path,
+            Self::MakeMsix(path) => path,
+        }
+    }
 }
 
 fn resolve_msix_packager() -> Option<MsixPackager> {
@@ -413,6 +424,7 @@ fn package_source_msix(
     let packager = resolve_msix_packager()
         .ok_or_else(|| anyhow!("neither makeappx nor makemsix was found for MSIX packaging"))?;
     let output = match &packager {
+        #[cfg(windows)]
         MsixPackager::MakeAppx(path) => Command::new(path)
             .arg("pack")
             .arg("/o")
@@ -455,11 +467,7 @@ fn package_source_msix(
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let tool = match packager {
-            MsixPackager::MakeAppx(ref path) | MsixPackager::MakeMsix(ref path) => {
-                path.display().to_string()
-            }
-        };
+        let tool = packager.path().display().to_string();
         bail!(
             "{tool} failed for {}{}\n{}",
             output_package.display(),
