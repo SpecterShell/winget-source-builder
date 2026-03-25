@@ -6,7 +6,7 @@
 
 - Rust 負責掃描、雜湊、manifest 合併/解析、正規化、差異計算、狀態管理、發佈規劃、WinGetUtil 互操作，以及 `source2.msix` 封裝。
 - `WinGetUtil.dll` 仍然是可變索引寫入的相容後端，但現在由 Rust 在執行期直接載入。
-- MSIX 靜態資源放在來源模板倉庫的 `packaging/msix/` 下，而不是放在本建置器倉庫裡。
+- MSIX 靜態資源放在來源模板倉庫的 `packaging/` 下，而不是放在本建置器倉庫裡。
 
 ## 建置流程
 

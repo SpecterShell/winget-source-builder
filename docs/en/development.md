@@ -61,4 +61,4 @@ The Windows release zip contains:
 - the multilingual README files
 - the `docs/` directory
 
-The Rust binary expects `packaging/msix/` to come from the source/template repository being indexed, not from the builder artifact.
+The Rust binary expects `packaging/` to come from the source/template repository being indexed, not from the builder artifact.

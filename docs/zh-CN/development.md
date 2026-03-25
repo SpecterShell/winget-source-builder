@@ -61,4 +61,4 @@ Windows 发布 zip 内包含：
 - 三个语言版本的 README
 - `docs/` 目录
 
-Rust 主程序需要从被索引的源模板仓库中读取 `packaging/msix/`，而不是从 builder 发布包中读取。
+Rust 主程序需要从被索引的源模板仓库中读取 `packaging/`，而不是从 builder 发布包中读取。

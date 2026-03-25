@@ -6,8 +6,8 @@ use anyhow::anyhow;
 use anyhow::{Result, bail};
 #[cfg(windows)]
 const WINGETUTIL_DLL_FILE_NAME: &str = "WinGetUtil.dll";
-const PACKAGING_MSIX_RELATIVE_DIR: &str = "packaging/msix";
-const APPX_MANIFEST_RELATIVE_PATH: &str = "packaging/msix/AppxManifest.xml";
+const PACKAGING_RELATIVE_DIR: &str = "packaging";
+const APPX_MANIFEST_RELATIVE_PATH: &str = "packaging/AppxManifest.xml";
 #[cfg(windows)]
 const PACKAGE_OUTPUT_NAME: &str = "source2.msix";
 #[cfg(windows)]
@@ -86,7 +86,7 @@ pub fn resolve_workspace_root(repo_root_hint: Option<&Path>) -> Result<PathBuf> 
     }
 
     bail!(
-        "failed to locate the workspace root; set WINGET_SOURCE_BUILDER_WORKSPACE_ROOT or keep packaging/msix next to the source repository"
+        "failed to locate the workspace root; set WINGET_SOURCE_BUILDER_WORKSPACE_ROOT or keep packaging next to the source repository"
     )
 }
 
@@ -161,7 +161,7 @@ fn looks_like_packaging_root(workspace_root: &Path) -> bool {
 
 fn looks_like_workspace_root(workspace_root: &Path) -> bool {
     workspace_root.join("Cargo.toml").is_file()
-        || workspace_root.join(PACKAGING_MSIX_RELATIVE_DIR).is_dir()
+        || workspace_root.join(PACKAGING_RELATIVE_DIR).is_dir()
 }
 
 #[cfg(windows)]
@@ -174,7 +174,7 @@ fn resolve_existing_win_get_util_path() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
-    let resource_root = workspace_root.join(PACKAGING_MSIX_RELATIVE_DIR);
+    let resource_root = workspace_root.join(PACKAGING_RELATIVE_DIR);
     let manifest_path = workspace_root.join(APPX_MANIFEST_RELATIVE_PATH);
 
     if !manifest_path.is_file() {

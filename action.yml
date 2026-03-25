@@ -12,7 +12,7 @@ inputs:
     description: Path to the publish output directory.
     required: true
   workspace-root:
-    description: Root directory containing packaging/msix for the source being built.
+    description: Root directory containing packaging/ for the source being built.
     required: true
   format:
     description: Catalog format to build.

@@ -7,7 +7,7 @@
 - `winget-cli/`: git submodule used to build `WinGetUtil.dll` during Windows builds.
 - `action.yml`: reusable GitHub Action entrypoint for source/template repositories.
 - `scripts/`: local and CI bootstrap scripts, including native WinGetUtil provisioning.
-- `tests/data/e2e-repo/`: minimal fixture repo for end-to-end testing, including template-style `packaging/msix/`.
+- `tests/data/e2e-repo/`: minimal fixture repo for end-to-end testing, including template-style `packaging/`.
 - `docs/`: multilingual project documentation.
 - `.github/workflows/`: CI and release automation.
 
@@ -29,6 +29,7 @@
 - `source2.msix` is the only source package format in scope for v1.
 - Runtime i18n is backed by `rust-i18n` and external locale files under `locales/`. New locales can be added without editing Rust source files.
 - The builder repository now ships a reusable GitHub Action, while source branding and MSIX resources live in the separate template/source repository.
+- The template/source workflow is responsible for signing `source2.msix` with its own certificate secrets after the builder produces the publish tree.
 
 ## Known Limitations
 
@@ -60,7 +61,7 @@
 - Rust owns scan, WinGet-compatible merge/parsing, canonicalization, hashing, diffing, state management, validation scheduling, staging, publish planning, direct WinGetUtil interop, and `makeappx` orchestration.
 - Keep the Windows boundary thin even though it now lives inside Rust. A future custom writer should still be able to replace WinGetUtil-facing code without changing scan, diff, or state logic.
 - Deterministic hosted merged manifests are the single source of truth for published manifest bytes and for WinGetUtil ingestion.
-- The builder consumes `packaging/msix/` from the source/template repository. Branding and Appx metadata do not belong in the builder repository.
+- The builder consumes `packaging/` from the source/template repository. Branding and Appx metadata do not belong in the builder repository.
 - Source format support should stay behind the writer and publisher boundary so future source versions can be added without rewriting the core pipeline.
 
 ## State Store And Hash Design
@@ -128,7 +129,7 @@
 - The biggest performance win comes from true incremental design and parallel preprocessing, not from Rust replacing C# by itself.
 - A custom writer can improve small-delta asymptotics, but exact WinGet compatibility becomes the hard part.
 - Keep MSIX static resources out of Rust source files.
-  `packaging/msix/` should stay in the source/template repository so Appx manifest and image updates do not require rebuilding the action or touching builder internals.
+  `packaging/` should stay in the source/template repository so Appx manifest and image updates do not require rebuilding the action or touching builder internals.
 - The Windows boundary should stay thin. Rust is a good fit for parallel scan and diff work, and direct FFI keeps the WinGetUtil path simpler than a separate wrapper executable.
 - CI must not assume a fully provisioned Windows indexing environment. The end-to-end path needs to skip itself cleanly when `WinGetUtil.dll` or `makeappx.exe` is unavailable.
 - GitHub-hosted Windows builds should be treated as `windows-2025` builds, not a vague `windows-latest` target.

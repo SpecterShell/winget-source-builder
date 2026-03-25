@@ -6,7 +6,7 @@
 - 运行时需要 `winget-source-builder.exe` 同目录下的 `WinGetUtil.dll`。Windows 构建会默认从仓库内置的 `winget-cli` 子模块自动生成它。
 - 需要 Windows SDK 的 `makeappx.exe`，或设置 `MAKEAPPX_EXE`。
 - 需要一个按 WinGet 清单结构组织的清单仓库。
-- 源仓库根目录还需要包含 `packaging/msix/`。
+- 源仓库根目录还需要包含 `packaging/`。
 - 从源码仓库运行时需要 Rust stable，并执行 `git submodule update --init --recursive`。只有在想覆盖内置 `winget-cli` 子模块时，才需要设置 `WINGET_CLI_ROOT`。
 
 ## 命令
@@ -37,7 +37,7 @@ cargo run -- build `
 
 - `WINGET_CLI_ROOT`：`winget-cli` 源码仓库的绝对路径，用于在编译时引导 `WinGetUtil.dll`。
 - `MAKEAPPX_EXE`：`makeappx.exe` 的绝对路径。
-- `WINGET_SOURCE_BUILDER_WORKSPACE_ROOT`：覆盖默认的工作区根目录，用于定位 `packaging/msix/`。如果 `--repo` 已经指向源模板仓库内的目录，通常无需手动设置。
+- `WINGET_SOURCE_BUILDER_WORKSPACE_ROOT`：覆盖默认的工作区根目录，用于定位 `packaging/`。如果 `--repo` 已经指向源模板仓库内的目录，通常无需手动设置。
 - `WINGET_SOURCE_BUILDER_LANG`：构建进度和摘要输出的运行时语言。只要 `locales/` 下存在对应语言文件，就可以使用，例如 `en` 或 `zh-CN`。
 
 ## 输出目录

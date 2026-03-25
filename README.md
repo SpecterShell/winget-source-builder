@@ -20,7 +20,7 @@ User-facing messages are localized through external locale files under `locales/
 - `WinGetUtil.dll` next to `winget-source-builder.exe` at runtime. Windows builds provision it automatically from the bundled `winget-cli` submodule.
 - Windows SDK `makeappx.exe`, or `MAKEAPPX_EXE` pointing to it.
 - For source-checkout usage: Rust stable and `git submodule update --init --recursive`.
-- The source repository being indexed should contain `packaging/msix/`, for example from `winget-source-template`.
+- The source repository being indexed should contain `packaging/`, for example from `winget-source-template`.
 
 ## Quick Start
 
@@ -64,7 +64,7 @@ State layout:
 This repository also ships a reusable GitHub Action in [action.yml](https://github.com/SpecterShell/winget-source-builder/blob/main/action.yml). The intended consumer is a source/template repo that contains:
 
 - `manifests/`
-- `packaging/msix/`
+- `packaging/`
 
 See `winget-source-template` for the expected layout and workflow pattern.
 

@@ -6,7 +6,7 @@ The project is implemented as a Rust CLI with a thin native interop layer inside
 
 - Rust handles scanning, hashing, manifest merge/parsing, canonicalization, diffing, state management, publish planning, WinGetUtil interop, and `source2.msix` creation.
 - `WinGetUtil.dll` is still the compatibility backend for the mutable writer, but it is loaded directly from Rust at runtime.
-- Static MSIX resources live in the source/template repository under `packaging/msix/`, not in this builder repository.
+- Static MSIX resources live in the source/template repository under `packaging/`, not in this builder repository.
 
 ## Build Pipeline
 

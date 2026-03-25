@@ -6,7 +6,7 @@
 - `WinGetUtil.dll` next to `winget-source-builder.exe` at runtime. Windows builds provision it automatically from the bundled `winget-cli` submodule.
 - Windows SDK `makeappx.exe`, or `MAKEAPPX_EXE`.
 - A manifest repository laid out like WinGet manifests.
-- The source repository root should also contain `packaging/msix/`.
+- The source repository root should also contain `packaging/`.
 - For source-checkout usage: Rust stable. Initialize the bundled submodule with `git submodule update --init --recursive`. `WINGET_CLI_ROOT` is only needed if you want to override the bundled `winget-cli` checkout.
 
 ## Commands
@@ -37,7 +37,7 @@ From a packaged artifact:
 
 - `WINGET_CLI_ROOT`: absolute path to a `winget-cli` checkout for compile-time `WinGetUtil.dll` bootstrap.
 - `MAKEAPPX_EXE`: absolute path to `makeappx.exe`.
-- `WINGET_SOURCE_BUILDER_WORKSPACE_ROOT`: override the workspace root used to find `packaging/msix/`. If `--repo` already points into a source/template repository, the builder will usually infer this automatically.
+- `WINGET_SOURCE_BUILDER_WORKSPACE_ROOT`: override the workspace root used to find `packaging/`. If `--repo` already points into a source/template repository, the builder will usually infer this automatically.
 - `WINGET_SOURCE_BUILDER_LANG`: runtime language for build progress and summary output. Any locale file present under `locales/` can be selected, for example `en` or `zh-CN`.
 
 ## Output Tree

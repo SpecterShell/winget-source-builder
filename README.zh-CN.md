@@ -20,7 +20,7 @@
 - 运行时需要 `winget-source-builder.exe` 同目录下的 `WinGetUtil.dll`。Windows 构建会默认从仓库内置的 `winget-cli` 子模块自动生成它。
 - 需要 Windows SDK 的 `makeappx.exe`，或通过 `MAKEAPPX_EXE` 指定其路径。
 - 从源码仓库运行时需要 Rust stable，并执行 `git submodule update --init --recursive`。
-- 被索引的源仓库需要包含 `packaging/msix/`，例如 `winget-source-template` 提供的模板结构。
+- 被索引的源仓库需要包含 `packaging/`，例如 `winget-source-template` 提供的模板结构。
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ cargo run -- build `
 推荐的消费方是一个包含以下目录的源模板仓库：
 
 - `manifests/`
-- `packaging/msix/`
+- `packaging/`
 
 目录布局与工作流示例可参考 `winget-source-template`。
 
