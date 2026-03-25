@@ -19,7 +19,7 @@ User-facing messages are localized through external locale files under `locales/
 - Windows 10/11 for the full WinGetUtil path and for `v2` sidecar generation.
 - `WinGetUtil.dll` next to `winget-source-builder.exe` at runtime. Windows builds provision it automatically from the bundled `winget-cli` submodule.
 - `makeappx.exe` from the Windows SDK or `makemsix`. Non-Windows builds provision `makemsix` from the bundled `msix-packaging` submodule.
-- For source-checkout usage: Rust stable and `git submodule update --init --recursive`.
+- For source-checkout usage: Rust stable and `git submodule update --init winget-cli msix-packaging`.
 - The source repository being indexed should contain `packaging/`, for example from `winget-source-template`.
 
 ## Quick Start
@@ -27,7 +27,7 @@ User-facing messages are localized through external locale files under `locales/
 Build from a source checkout:
 
 ```powershell
-git submodule update --init --recursive
+git submodule update --init winget-cli msix-packaging
 cargo run -- build `
   --repo C:\path\to\source-repo\manifests `
   --state C:\path\to\builder-state `

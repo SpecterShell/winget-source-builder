@@ -42,13 +42,13 @@ The repository ships two workflows:
   - runs `cargo fmt --all --check`
   - runs `cargo clippy --all-targets --all-features -- -D warnings`
   - runs `cargo test --verbose` on Linux, macOS, and Windows
-  - checks out submodules in test/build jobs so `build.rs` can provision `WinGetUtil.dll` and `makemsix`
-  - produces a Windows x64 workflow artifact
+  - checks out first-level submodules in test/build jobs so `build.rs` can provision `WinGetUtil.dll` and `makemsix`
+  - produces Linux x86_64, macOS, Windows x86_64, and Windows aarch64 workflow artifacts
 - `release.yml`
   - runs on `v*` tags
   - builds the Rust CLI in release mode
   - lets `build.rs` provision `WinGetUtil.dll` during compilation
-  - packages a Windows x64 release zip and uploads it to the GitHub release
+  - packages Linux x86_64, macOS, Windows x86_64, and Windows aarch64 release artifacts and uploads them to the GitHub release
 
 Downstream repositories are expected to download the published Windows release artifact directly in their own workflows, for example with `robinraju/release-downloader`, instead of using a reusable action from this repository.
 

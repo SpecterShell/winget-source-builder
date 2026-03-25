@@ -42,13 +42,13 @@ cargo test --verbose
   - 执行 `cargo fmt --all --check`
   - 执行 `cargo clippy --all-targets --all-features -- -D warnings`
   - 在 Linux、macOS、Windows 上执行 `cargo test --verbose`
-  - 在 test/build 作业中检出子模块，让 `build.rs` 自动准备 `WinGetUtil.dll` 和 `makemsix`
-  - 生成一个 Windows x64 的 workflow artifact
+  - 在 test/build 作业中检出一级子模块，让 `build.rs` 自动准备 `WinGetUtil.dll` 和 `makemsix`
+  - 生成 Linux x86_64、macOS、Windows x86_64 与 Windows aarch64 的 workflow artifact
 - `release.yml`
   - 在 `v*` tag 上触发
   - 以 release 模式构建 Rust CLI
   - 在编译过程中由 `build.rs` 准备 `WinGetUtil.dll`
-  - 打包 Windows x64 发布 zip，并上传到 GitHub Release
+  - 打包 Linux x86_64、macOS、Windows x86_64 与 Windows aarch64 发布包，并上传到 GitHub Release
 
 下游仓库应当在自己的 workflow 中直接下载本仓库发布的 Windows release 产物，例如使用 `robinraju/release-downloader`，而不是再依赖本仓库提供的复用 Action。
 

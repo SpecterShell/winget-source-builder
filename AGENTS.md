@@ -136,5 +136,7 @@
 - CI must not assume a fully provisioned packaging environment. End-to-end tests need to skip themselves cleanly when the required WinGetUtil or MSIX packager dependency is unavailable.
 - GitHub-hosted Windows builds should be treated as `windows-2025` builds, not a vague `windows-latest` target.
   The workflows now add `VCPKG_INSTALLATION_ROOT` to `PATH` explicitly before building `winget-cli`, instead of assuming `vcpkg.exe` is already resolvable.
+- Only first-level submodules should be initialized for this repository.
+  The builder needs `winget-cli/` and `msix-packaging/`, but recursive submodule checkout can fail inside vendored content under `msix-packaging` without adding any value for this project.
 - For downstream consumption, a plain workflow that downloads a release artifact is easier to reason about than maintaining a reusable action contract in parallel.
 - Non-Windows packaging support is practical for `v1` if `makemsix` is provisioned beside the executable and launched with its library search path set explicitly.

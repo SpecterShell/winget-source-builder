@@ -48,7 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
 
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
@@ -93,7 +93,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
 
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
