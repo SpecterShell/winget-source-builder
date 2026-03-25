@@ -7,7 +7,7 @@
 - `makeappx.exe` from the Windows SDK or `makemsix`. Non-Windows source-checkout builds provision `makemsix` automatically from the bundled `msix-packaging` submodule.
 - A manifest repository laid out like WinGet manifests.
 - The source repository root should also contain `packaging/`.
-- For source-checkout usage: Rust stable. Initialize the bundled submodules with `git submodule update --init winget-cli msix-packaging`. `WINGET_CLI_ROOT` or `MSIX_PACKAGING_ROOT` are only needed if you want to override the bundled submodule checkouts.
+- For source-checkout usage: Rust stable. Initialize the bundled submodules with `git -c submodule.recurse=false submodule update --init winget-cli msix-packaging`. `WINGET_CLI_ROOT` or `MSIX_PACKAGING_ROOT` are only needed if you want to override the bundled submodule checkouts.
 
 ## Commands
 

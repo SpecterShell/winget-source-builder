@@ -19,7 +19,7 @@
 - 完整 WinGetUtil 路徑以及 `v2` sidecar 產生需要 Windows 10/11。
 - 執行時需要 `winget-source-builder.exe` 同目錄下的 `WinGetUtil.dll`。Windows 建置會預設從倉庫內建的 `winget-cli` 子模組自動產生它。
 - 需要 Windows SDK 的 `makeappx.exe` 或 `makemsix`。非 Windows 建置會預設從倉庫內建的 `msix-packaging` 子模組建出 `makemsix`。
-- 從原始碼倉庫執行時需要 Rust stable，並執行 `git submodule update --init winget-cli msix-packaging`。
+- 從原始碼倉庫執行時需要 Rust stable，並執行 `git -c submodule.recurse=false submodule update --init winget-cli msix-packaging`。
 - 被索引的來源倉庫需要包含 `packaging/`，例如 `winget-source-template` 提供的模板結構。
 
 ## 快速開始
@@ -27,7 +27,7 @@
 從原始碼倉庫建置：
 
 ```powershell
-git submodule update --init winget-cli msix-packaging
+git -c submodule.recurse=false submodule update --init winget-cli msix-packaging
 cargo run -- build `
   --repo C:\path\to\source-repo\manifests `
   --state C:\path\to\builder-state `

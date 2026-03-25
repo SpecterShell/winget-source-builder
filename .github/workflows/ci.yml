@@ -47,8 +47,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Initialize required submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
+          git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
 
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'
@@ -92,8 +97,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Initialize required submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
+          git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
 
       - name: Add vcpkg to PATH
         if: runner.os == 'Windows'

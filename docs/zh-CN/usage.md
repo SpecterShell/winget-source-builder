@@ -7,7 +7,7 @@
 - 需要 Windows SDK 的 `makeappx.exe` 或 `makemsix`。非 Windows 的源码构建会默认从仓库内置的 `msix-packaging` 子模块自动构建 `makemsix`。
 - 需要一个按 WinGet 清单结构组织的清单仓库。
 - 源仓库根目录还需要包含 `packaging/`。
-- 从源码仓库运行时需要 Rust stable，并执行 `git submodule update --init winget-cli msix-packaging`。只有在想覆盖内置子模块时，才需要设置 `WINGET_CLI_ROOT` 或 `MSIX_PACKAGING_ROOT`。
+- 从源码仓库运行时需要 Rust stable，并执行 `git -c submodule.recurse=false submodule update --init winget-cli msix-packaging`。只有在想覆盖内置子模块时，才需要设置 `WINGET_CLI_ROOT` 或 `MSIX_PACKAGING_ROOT`。
 
 ## 命令
 
