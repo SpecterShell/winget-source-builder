@@ -139,7 +139,7 @@ jobs:
             artifact_name: winget-source-builder-linux-x86_64
             archive_ext: tar.gz
           - name: linux-aarch64
-            os: ubuntu-24.04
+            os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: winget-source-builder-linux-aarch64
             archive_ext: tar.gz
@@ -149,7 +149,7 @@ jobs:
             artifact_name: winget-source-builder-macos-aarch64
             archive_ext: tar.gz
           - name: macos-x86_64
-            os: macos-latest
+            os: macos-26-intel
             target: x86_64-apple-darwin
             artifact_name: winget-source-builder-macos-x86_64
             archive_ext: tar.gz
@@ -159,7 +159,7 @@ jobs:
             artifact_name: winget-source-builder-windows-x86_64
             archive_ext: zip
           - name: windows-aarch64
-            os: windows-2025
+            os: windows-11-arm
             target: aarch64-pc-windows-msvc
             artifact_name: winget-source-builder-windows-aarch64
             archive_ext: zip

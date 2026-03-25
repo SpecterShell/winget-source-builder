@@ -24,7 +24,7 @@ use crate::state::{
     BuildPackageChange, BuildVersionChange, CurrentStateUpdate, PublishedFile, StateStore,
     StoredFile, StoredPackage, StoredVersion,
 };
-use crate::version::compare_version_and_channel;
+use crate::version::compare_versions;
 use crate::{BackendKind, BuildArgs, QueueValidationArgs};
 
 #[derive(Debug, Clone)]
@@ -823,7 +823,9 @@ fn apply_arp_display_version_policy(
 
             let winner = contenders
                 .iter()
-                .max_by(|left, right| compare_snapshot_versions(computed_versions, left, right))
+                .max_by(|left, right| {
+                    compare_snapshot_package_versions(computed_versions, left, right)
+                })
                 .cloned()
                 .ok_or_else(|| anyhow!("display version contenders unexpectedly empty"))?;
             let stripped_versions = contenders
@@ -945,7 +947,7 @@ fn build_current_versions_by_package(
     result
 }
 
-fn compare_snapshot_versions(
+fn compare_snapshot_package_versions(
     computed_versions: &HashMap<String, ComputedVersionSnapshot>,
     left_version_dir: &str,
     right_version_dir: &str,
@@ -957,13 +959,9 @@ fn compare_snapshot_versions(
         .get(right_version_dir)
         .expect("missing right snapshot");
 
-    compare_version_and_channel(
-        &left.package_version,
-        &left.channel,
-        &right.package_version,
-        &right.channel,
-    )
-    .then_with(|| left_version_dir.cmp(right_version_dir))
+    compare_versions(&left.package_version, &right.package_version)
+        .then_with(|| left.channel.cmp(&right.channel))
+        .then_with(|| left_version_dir.cmp(right_version_dir))
 }
 
 fn build_version_changes_and_validation_queue(
@@ -1511,6 +1509,78 @@ mod tests {
     }
 
     #[test]
+    fn arp_display_version_conflicts_keep_highest_package_version() {
+        let repo_root = tempfile::tempdir().unwrap();
+        let older_version_dir = "manifests/u/Unity/UnityHub/3.15.2".to_string();
+        let newer_version_dir = "manifests/u/Unity/UnityHub/3.16.2".to_string();
+        let mut computed_versions = HashMap::from([
+            (
+                older_version_dir.clone(),
+                synthetic_snapshot_with_display_version(
+                    &older_version_dir,
+                    "Unity.UnityHub",
+                    "3.15.2",
+                    "3.14.4",
+                    1,
+                ),
+            ),
+            (
+                newer_version_dir.clone(),
+                synthetic_snapshot_with_display_version(
+                    &newer_version_dir,
+                    "Unity.UnityHub",
+                    "3.16.2",
+                    "3.14.4",
+                    2,
+                ),
+            ),
+        ]);
+        let current_version_abs = HashMap::from([
+            (
+                older_version_dir.clone(),
+                repo_root.path().join(older_version_dir.as_str()),
+            ),
+            (
+                newer_version_dir.clone(),
+                repo_root.path().join(newer_version_dir.as_str()),
+            ),
+        ]);
+        let dirty_version_dirs =
+            HashSet::from([older_version_dir.clone(), newer_version_dir.clone()]);
+        let previous_versions = HashMap::new();
+        let progress = ProgressReporter::new();
+        let messages = crate::i18n::Messages::new("en");
+
+        let changed_version_dirs = apply_arp_display_version_policy(
+            repo_root.path(),
+            &current_version_abs,
+            &dirty_version_dirs,
+            &previous_versions,
+            &mut computed_versions,
+            &progress,
+            &messages,
+        )
+        .unwrap();
+
+        assert!(changed_version_dirs.contains(&older_version_dir));
+        assert!(changed_version_dirs.contains(&newer_version_dir));
+        assert_eq!(
+            extract_display_versions_from_manifest_bytes(
+                &computed_versions[older_version_dir.as_str()].published_manifest_bytes,
+            )
+            .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            extract_display_versions_from_manifest_bytes(
+                &computed_versions[newer_version_dir.as_str()].published_manifest_bytes,
+            )
+            .unwrap(),
+            BTreeSet::from(["3.14.4".to_string()])
+        );
+    }
+
+    #[test]
     fn builds_fixture_repo_end_to_end_on_windows() {
         if !cfg!(windows) {
             return;
@@ -1836,6 +1906,49 @@ mod tests {
             )
             .into_bytes(),
             source_file_count: 1,
+        }
+    }
+
+    fn synthetic_snapshot_with_display_version(
+        version_dir: &str,
+        package_id: &str,
+        package_version: &str,
+        display_version: &str,
+        content_marker: u8,
+    ) -> ComputedVersionSnapshot {
+        let snapshot = synthetic_snapshot(
+            version_dir,
+            package_id,
+            package_version,
+            &[&format!("installer-{content_marker:02x}")],
+            content_marker,
+        );
+        let manifest_bytes = format!(
+            concat!(
+                "PackageIdentifier: {package_id}\n",
+                "PackageVersion: \"{package_version}\"\n",
+                "ManifestVersion: 1.10.0\n",
+                "ManifestType: merged\n",
+                "AppsAndFeaturesEntries:\n",
+                "  - DisplayVersion: \"{display_version}\"\n",
+                "Installers:\n",
+                "  - Architecture: x64\n",
+                "    InstallerType: exe\n",
+                "    InstallerUrl: https://example.invalid/{content_marker:02x}.exe\n",
+                "    InstallerSha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+            ),
+            package_id = package_id,
+            package_version = package_version,
+            display_version = display_version,
+            content_marker = content_marker,
+        )
+        .into_bytes();
+        let published_manifest_sha256 = sha256_bytes(&manifest_bytes);
+
+        ComputedVersionSnapshot {
+            published_manifest_sha256,
+            published_manifest_bytes: manifest_bytes,
+            ..snapshot
         }
     }
 
