@@ -62,6 +62,12 @@ jobs:
           git -c submodule.recurse=false submodule sync -- ${{ matrix.submodules }}
           git -c submodule.recurse=false submodule update --init --depth 1 ${{ matrix.submodules }}
 
+      - name: Resolve msix-packaging revision
+        if: runner.os != 'Windows'
+        id: msix_packaging_revision
+        shell: bash
+        run: echo "value=$(git -C msix-packaging rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Resolve winget-cli revision
         if: runner.os == 'Windows'
         id: winget_cli_revision
@@ -93,6 +99,17 @@ jobs:
           path: target/debug/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
+      - name: Restore makemsix cache
+        if: runner.os != 'Windows'
+        id: makemsix_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/debug/makemsix
+            target/debug/libmsix*.so*
+            target/debug/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-debug-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -102,6 +119,16 @@ jobs:
         with:
           path: target/debug/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
+      - name: Save makemsix cache
+        if: runner.os != 'Windows' && steps.makemsix_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/debug/makemsix
+            target/debug/libmsix*.so*
+            target/debug/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-debug-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
 
   test:
     name: Test (${{ matrix.name }})
@@ -128,6 +155,12 @@ jobs:
           set -euo pipefail
           git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
           git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
+
+      - name: Resolve msix-packaging revision
+        if: runner.os != 'Windows'
+        id: msix_packaging_revision
+        shell: bash
+        run: echo "value=$(git -C msix-packaging rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Resolve winget-cli revision
         if: runner.os == 'Windows'
@@ -158,6 +191,17 @@ jobs:
           path: target/debug/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
+      - name: Restore makemsix cache
+        if: runner.os != 'Windows'
+        id: makemsix_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/debug/makemsix
+            target/debug/libmsix*.so*
+            target/debug/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-debug-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
+
       - name: Run tests
         run: cargo test --verbose
 
@@ -167,6 +211,16 @@ jobs:
         with:
           path: target/debug/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-debug-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
+      - name: Save makemsix cache
+        if: runner.os != 'Windows' && steps.makemsix_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/debug/makemsix
+            target/debug/libmsix*.so*
+            target/debug/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-debug-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
 
   build:
     name: Build (${{ matrix.name }})
@@ -223,6 +277,12 @@ jobs:
           git -c submodule.recurse=false submodule sync -- winget-cli msix-packaging
           git -c submodule.recurse=false submodule update --init --depth 1 winget-cli msix-packaging
 
+      - name: Resolve msix-packaging revision
+        if: runner.os != 'Windows'
+        id: msix_packaging_revision
+        shell: bash
+        run: echo "value=$(git -C msix-packaging rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Resolve winget-cli revision
         if: runner.os == 'Windows'
         id: winget_cli_revision
@@ -254,6 +314,17 @@ jobs:
           path: target/${{ matrix.target }}/release/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
 
+      - name: Restore makemsix cache
+        if: runner.os != 'Windows'
+        id: makemsix_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/${{ matrix.target }}/release/makemsix
+            target/${{ matrix.target }}/release/libmsix*.so*
+            target/${{ matrix.target }}/release/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
+
 
       - name: Build Rust CLI
         run: cargo build --release --verbose --target ${{ matrix.target }}
@@ -264,6 +335,16 @@ jobs:
         with:
           path: target/${{ matrix.target }}/release/WinGetUtil.dll
           key: wingetutil-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.winget_cli_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-wingetutil.ps1') }}
+
+      - name: Save makemsix cache
+        if: runner.os != 'Windows' && steps.makemsix_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/${{ matrix.target }}/release/makemsix
+            target/${{ matrix.target }}/release/libmsix*.so*
+            target/${{ matrix.target }}/release/libmsix*.dylib*
+          key: makemsix-${{ runner.os }}-${{ matrix.target }}-release-${{ steps.msix_packaging_revision.outputs.value }}-${{ hashFiles('build.rs', 'scripts/build-makemsix.sh') }}
 
       - name: Stage artifact
         if: runner.os == 'Windows'
