@@ -10,9 +10,7 @@
 
 `winget-source-builder` helps you run your own WinGet package repository. If you maintain a collection of software manifests and want users to install from your source using `winget source add`, this tool builds the required indexes and packages.
 
-**The problem it solves:** Creating a valid WinGet source involves complex indexing, hashing, and MSIX packaging. Doing this manually is error-prone and slow. This tool automates the entire pipeline.
-
-**How it works:** The builder scans your YAML manifests, tracks file changes using SHA256 hashes, and maintains an incremental state database. On each run, it only processes what changed — making subsequent builds nearly instantaneous. It outputs a ready-to-deploy MSIX package (`source.msix` or `source2.msix`) plus hosted manifest files.
+The builder scans your YAML manifests, tracks file changes using SHA256 hashes, and maintains an incremental state database. On each run, it only processes what changed — making subsequent builds nearly instantaneous. It outputs a ready-to-deploy MSIX package (`source.msix` or `source2.msix`) plus hosted manifest files.
 
 **Who it's for:** Package repository maintainers, software distributors, and organizations that need a private or public WinGet source alternative to the Microsoft Community Repository.
 
@@ -64,7 +62,7 @@ After running these commands, you'll find:
 Users can then add your source:
 
 ```powershell
-winget source add --name mysource --argument https://your-domain.com/source2.msix
+winget source add --name mysource --type Microsoft.PreIndexed.Package --arg https://your-domain.com/path/to/source/
 ```
 
 ## Common Workflows

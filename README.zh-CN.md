@@ -10,9 +10,7 @@
 
 `winget-source-builder` 帮助你搭建私有的 WinGet 软件包仓库。如果你维护了一套软件清单集合，希望用户可以通过 `winget source add` 命令从你的源安装软件，本工具可以帮你生成所需的索引和安装包。
 
-**解决的痛点：** 创建合法的 WinGet 源需要完成复杂的索引生成、哈希计算和 MSIX 打包流程，手动操作不仅容易出错，而且效率极低。本工具实现了全流程自动化，开箱即用。
-
-**工作原理：** 构建工具会扫描你的 YAML 清单，通过 SHA256 哈希跟踪文件变更，维护增量状态数据库。每次运行仅处理发生变更的内容，后续构建几乎可以瞬间完成。最终输出可直接部署的 MSIX 包（`source.msix` 或 `source2.msix`）以及托管清单文件。
+构建工具会扫描你的 YAML 清单，通过 SHA256 哈希跟踪文件变更，维护增量状态数据库。每次运行仅处理发生变更的内容，后续构建几乎可以瞬间完成。最终输出可直接部署的 MSIX 包（`source.msix` 或 `source2.msix`）以及托管清单文件。
 
 **适用人群：** 软件包仓库维护者、软件分发方，以及需要替代微软社区仓库、搭建私有或公共 WinGet 源的企业组织。
 
@@ -64,7 +62,7 @@ winget-source-builder publish `
 用户即可通过以下命令添加你的软件源：
 
 ```powershell
-winget source add --name mysource --argument https://your-domain.com/source2.msix
+winget source add --name mysource --type Microsoft.PreIndexed.Package --arg https://your-domain.com/path/to/source/
 ```
 
 ## 常见工作流
