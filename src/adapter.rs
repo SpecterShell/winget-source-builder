@@ -2,9 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-use anyhow::anyhow;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 #[cfg(windows)]
 const WINGETUTIL_DLL_FILE_NAME: &str = "WinGetUtil.dll";
 const PACKAGING_RELATIVE_DIR: &str = "packaging";
