@@ -10,6 +10,7 @@ enum ApproximateComparator {
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct VersionPart {
     integer: u64,
+    overflow_digits: Option<String>,
     other: String,
     folded_other: String,
 }
@@ -18,6 +19,7 @@ impl VersionPart {
     fn zero() -> Self {
         Self {
             integer: 0,
+            overflow_digits: None,
             other: String::new(),
             folded_other: String::new(),
         }
@@ -33,23 +35,24 @@ impl VersionPart {
             .bytes()
             .take_while(|byte| byte.is_ascii_digit())
             .count();
-        let (integer, other) = if digit_prefix_len == 0 {
-            (0, trimmed.to_string())
+        let (integer, overflow_digits, other) = if digit_prefix_len == 0 {
+            (0, None, trimmed.to_string())
         } else if digit_prefix_len == trimmed.len() {
             match trimmed.parse::<u64>() {
-                Ok(integer) => (integer, String::new()),
-                Err(_) => (0, trimmed.to_string()),
+                Ok(integer) => (integer, None, String::new()),
+                Err(_) => (u64::MAX, Some(trimmed.to_string()), String::new()),
             }
         } else {
             let (prefix, suffix) = trimmed.split_at(digit_prefix_len);
             match prefix.parse::<u64>() {
-                Ok(integer) => (integer, suffix.to_string()),
-                Err(_) => (0, trimmed.to_string()),
+                Ok(integer) => (integer, None, suffix.to_string()),
+                Err(_) => (u64::MAX, Some(prefix.to_string()), suffix.to_string()),
             }
         };
 
         Self {
             integer,
+            overflow_digits,
             folded_other: other.to_ascii_lowercase(),
             other,
         }
@@ -58,20 +61,32 @@ impl VersionPart {
 
 impl Ord for VersionPart {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.integer.cmp(&other.integer).then_with(|| {
-            match (self.other.is_empty(), other.other.is_empty()) {
+        self.integer
+            .cmp(&other.integer)
+            .then_with(|| compare_overflow_digits(&self.overflow_digits, &other.overflow_digits))
+            .then_with(|| match (self.other.is_empty(), other.other.is_empty()) {
                 (true, true) => Ordering::Equal,
                 (true, false) => Ordering::Greater,
                 (false, true) => Ordering::Less,
                 (false, false) => self.folded_other.cmp(&other.folded_other),
-            }
-        })
+            })
     }
 }
 
 impl PartialOrd for VersionPart {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+fn compare_overflow_digits(left: &Option<String>, right: &Option<String>) -> Ordering {
+    match (left.as_deref(), right.as_deref()) {
+        // Once a numeric part overflows u64, compare the original digit strings by magnitude
+        // instead of collapsing them into the same sentinel value.
+        (Some(left), Some(right)) => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -135,6 +150,15 @@ fn trim_trailing_zero_parts(parts: &mut Vec<VersionPart>) {
     }
 }
 
+/// Compares two WinGet-style version strings.
+///
+/// The comparison is tolerant of trailing zero parts, sentinel values such as `Latest`,
+/// and numeric parts that overflow `u64`.
+///
+/// # Arguments
+///
+/// * `left` - Left-hand version string.
+/// * `right` - Right-hand version string.
 pub(crate) fn compare_versions(left: &str, right: &str) -> Ordering {
     let left = ParsedVersion::parse(left);
     let right = ParsedVersion::parse(right);
@@ -177,6 +201,14 @@ fn approximate_ordering(left: &ParsedVersion, right: &ParsedVersion) -> Ordering
     }
 }
 
+/// Orders package versions the same way published indices do: channel ascending, version descending.
+///
+/// # Arguments
+///
+/// * `left_version` - Version string for the left-hand package version.
+/// * `left_channel` - Channel string for the left-hand package version.
+/// * `right_version` - Version string for the right-hand package version.
+/// * `right_channel` - Channel string for the right-hand package version.
 pub(crate) fn compare_version_and_channel(
     left_version: &str,
     left_channel: &str,
@@ -228,5 +260,11 @@ mod tests {
             compare_version_and_channel("1.0.0", "beta", "9.0.0", "").is_gt(),
             "channel ordering should dominate version ordering"
         );
+    }
+
+    #[test]
+    fn compares_oversized_numeric_parts_by_magnitude() {
+        assert!(compare_versions("18446744073709551616", "18446744073709551615").is_gt());
+        assert!(compare_versions("18446744073709551616", "18446744073709551617").is_lt());
     }
 }

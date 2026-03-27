@@ -42,7 +42,7 @@ usage() {
   cat <<'EOF'
 usage: build-makemsix.sh --msix-packaging-root <path> --destination <path> [--configuration <name>]
 
-Builds makemsix from the microsoft/msix-packaging checkout and copies the runtime
+Builds makemsix from the configured msix-packaging checkout and copies the runtime
 binary plus the libmsix shared library into the destination directory.
 EOF
 }

@@ -26,7 +26,7 @@ pub struct ComputedVersionSnapshot {
     pub source_file_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationRequirement {
     pub package_id: String,
     pub package_version: String,
@@ -86,6 +86,11 @@ struct SourceDoc {
     warnings: Vec<ManifestWarning>,
 }
 
+/// Resolves the effective scan root, accepting either the repo root or its `manifests/` child.
+///
+/// # Arguments
+///
+/// * `repo_root` - Repository root or direct manifests root supplied by the caller.
 pub fn scan_root(repo_root: &Path) -> PathBuf {
     let manifests = repo_root.join("manifests");
     if manifests.is_dir() {
@@ -96,6 +101,13 @@ pub fn scan_root(repo_root: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+/// Computes a version snapshot without returning manifest warnings.
+///
+/// # Arguments
+///
+/// * `repo_root` - Repository root used for generated publish-relative paths.
+/// * `version_dir_abs` - Absolute version directory containing the source YAML files.
+/// * `version_dir_rel` - Normalized repo-relative version directory identifier.
 pub fn compute_version_snapshot(
     repo_root: &Path,
     version_dir_abs: &Path,
@@ -107,6 +119,13 @@ pub fn compute_version_snapshot(
     )
 }
 
+/// Parses, merges, normalizes, and hashes a version directory while collecting manifest warnings.
+///
+/// # Arguments
+///
+/// * `repo_root` - Repository root used for generated publish-relative paths.
+/// * `version_dir_abs` - Absolute version directory containing the source YAML files.
+/// * `version_dir_rel` - Normalized repo-relative version directory identifier.
 pub fn compute_version_snapshot_with_warnings(
     repo_root: &Path,
     version_dir_abs: &Path,
@@ -151,12 +170,24 @@ pub fn compute_version_snapshot_with_warnings(
     Ok(ComputedVersionResult { snapshot, warnings })
 }
 
+/// Extracts every ARP `DisplayVersion` declared by a staged merged manifest.
+///
+/// # Arguments
+///
+/// * `bytes` - Merged manifest YAML bytes from a staged or computed snapshot.
 pub fn extract_display_versions_from_manifest_bytes(bytes: &[u8]) -> Result<BTreeSet<String>> {
     let root: YamlValue =
         serde_yaml::from_slice(bytes).context("failed to parse staged merged manifest YAML")?;
     extract_display_versions_from_manifest(&root)
 }
 
+/// Rebuilds a snapshot after stripping any non-retained ARP `DisplayVersion` values.
+///
+/// # Arguments
+///
+/// * `repo_root` - Repository root used for generated publish-relative paths.
+/// * `snapshot` - Previously computed snapshot whose merged manifest bytes will be rewritten.
+/// * `retained_display_versions` - Package-wide `DisplayVersion` values that should survive the rewrite.
 pub fn retain_display_versions_in_snapshot(
     repo_root: &Path,
     snapshot: &ComputedVersionSnapshot,
@@ -632,9 +663,13 @@ struct NormalizedNameParts {
 }
 
 fn normalize_name(value: &str) -> NormalizedNameParts {
-    let normalized = value.nfkc().collect::<String>().to_lowercase();
-    let architecture = detect_architecture(&normalized);
-    let without_arch = strip_architecture_tokens(&normalized);
+    // Normalize first, then strip architecture/locale markers from the folded form while keeping
+    // Unicode text intact for search keys.
+    let normalized: String = value.nfkc().collect();
+    let normalized_lower = normalized.to_lowercase();
+
+    let architecture = detect_architecture(&normalized_lower);
+    let without_arch = strip_architecture_tokens(&normalized_lower);
     let without_locale = strip_locale_tokens(&without_arch);
 
     NormalizedNameParts {
@@ -660,53 +695,62 @@ fn normalize_publisher(value: &str) -> String {
     collapse_search_text(&tokens.join(""))
 }
 
+/// Legal entity suffixes for publisher normalization.
+/// Using a static hash set for O(1) lookups.
+static LEGAL_ENTITY_SUFFIXES: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "ab",
+            "ad",
+            "ag",
+            "aps",
+            "as",
+            "asa",
+            "bv",
+            "co",
+            "company",
+            "corp",
+            "corporation",
+            "cv",
+            "doo",
+            "ev",
+            "ges",
+            "gesmbh",
+            "gmbh",
+            "holding",
+            "holdings",
+            "inc",
+            "incorporated",
+            "kg",
+            "ks",
+            "limited",
+            "llc",
+            "lp",
+            "ltd",
+            "ltda",
+            "mbh",
+            "nv",
+            "plc",
+            "ps",
+            "pty",
+            "pvt",
+            "sa",
+            "sarl",
+            "sca",
+            "sc",
+            "sl",
+            "spa",
+            "sp",
+            "srl",
+            "sro",
+            "subsidiary",
+        ]
+        .into_iter()
+        .collect()
+    });
+
 fn is_legal_entity_suffix(token: &str) -> bool {
-    matches!(
-        token,
-        "ab" | "ad"
-            | "ag"
-            | "aps"
-            | "as"
-            | "asa"
-            | "bv"
-            | "co"
-            | "company"
-            | "corp"
-            | "corporation"
-            | "cv"
-            | "doo"
-            | "ev"
-            | "ges"
-            | "gesmbh"
-            | "gmbh"
-            | "holding"
-            | "holdings"
-            | "inc"
-            | "incorporated"
-            | "kg"
-            | "ks"
-            | "limited"
-            | "llc"
-            | "lp"
-            | "ltd"
-            | "ltda"
-            | "mbh"
-            | "nv"
-            | "plc"
-            | "ps"
-            | "pty"
-            | "pvt"
-            | "sa"
-            | "sarl"
-            | "sca"
-            | "sc"
-            | "sl"
-            | "spa"
-            | "sp"
-            | "srl"
-            | "sro"
-            | "subsidiary"
-    )
+    LEGAL_ENTITY_SUFFIXES.contains(token)
 }
 
 fn collapse_search_text(value: &str) -> String {
@@ -800,10 +844,20 @@ fn canonicalize_full_manifest(root: &YamlValue) -> Result<JsonValue> {
     canonicalize_yaml(root, &[])
 }
 
+/// Serializes per-installer validation records for storage in the state DB.
+///
+/// # Arguments
+///
+/// * `installers` - Installer-level validation identities extracted from one merged manifest.
 pub fn installer_records_to_json(installers: &[InstallerRecord]) -> Result<String> {
     serde_json::to_string(installers).context("failed to serialize installer records")
 }
 
+/// Deserializes per-installer validation records from the state DB representation.
+///
+/// # Arguments
+///
+/// * `json` - Optional JSON string previously produced by [`installer_records_to_json`].
 pub fn parse_installer_records_json(json: Option<&str>) -> Result<Vec<InstallerRecord>> {
     match json {
         Some(json) if !json.trim().is_empty() => {
@@ -813,6 +867,12 @@ pub fn parse_installer_records_json(json: Option<&str>) -> Result<Vec<InstallerR
     }
 }
 
+/// Returns installers that are present in `current` but absent from `previous`.
+///
+/// # Arguments
+///
+/// * `previous` - Installer identities already known for the older snapshot.
+/// * `current` - Installer identities computed for the newer snapshot.
 pub fn added_installers(
     previous: &[InstallerRecord],
     current: &[InstallerRecord],
@@ -1249,12 +1309,22 @@ fn as_mapping_mut(value: &mut YamlValue) -> Result<&mut Mapping> {
         .ok_or_else(|| anyhow!("manifest root must be a mapping"))
 }
 
+/// Computes a SHA-256 digest and returns the raw bytes.
+///
+/// # Arguments
+///
+/// * `bytes` - Input payload to hash.
 pub fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hasher.finalize().to_vec()
 }
 
+/// Normalizes repository-relative paths to forward-slash separators.
+///
+/// # Arguments
+///
+/// * `path` - Repository-relative path that may contain platform-specific separators.
 pub fn normalize_rel(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -1448,6 +1518,13 @@ PackageUrl: https://example.invalid
     fn normalize_publisher_drops_legal_entity_suffixes() {
         assert_eq!(normalize_publisher("Example Inc"), "example");
         assert_eq!(normalize_publisher("Example Holdings LLC"), "example");
+    }
+
+    #[test]
+    fn normalize_name_preserves_unicode_characters() {
+        let normalized = normalize_name("Cafe编辑器 x64");
+        assert_eq!(normalized.base, "cafe编辑器");
+        assert_eq!(normalized.architecture, Some("X64"));
     }
 
     #[test]

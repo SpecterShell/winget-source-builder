@@ -7,7 +7,6 @@ use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use crate::CatalogFormat;
-use crate::adapter::package_published_index;
 use crate::manifest::{VersionIndexProjection, normalize_rel, sha256_bytes};
 #[cfg(not(windows))]
 use crate::mszip;
@@ -16,8 +15,17 @@ use crate::version::compare_version_and_channel;
 
 const PUBLISHER_METADATA_KIND: i64 = 5;
 
+/// Builds the staged publish database and package sidecars with the pure Rust backend.
+///
+/// # Arguments
+///
+/// * `stage_root` - Build staging directory where the backend should write its outputs.
+/// * `final_versions` - Final version snapshot map after diff application and synthetic rewrites.
+/// * `previous_packages` - Previously published package artifacts for reuse of unchanged sidecars.
+/// * `touched_packages` - Packages whose sidecars or index rows must be regenerated.
+/// * `last_successful_unix` - Timestamp of the last successful publish, used for index metadata.
+/// * `format` - Index family to generate.
 pub(crate) fn run_rust_backend(
-    workspace_root: &Path,
     stage_root: &Path,
     final_versions: &HashMap<String, StoredVersion>,
     previous_packages: &HashMap<String, StoredPackage>,
@@ -26,9 +34,8 @@ pub(crate) fn run_rust_backend(
     format: CatalogFormat,
 ) -> Result<()> {
     match format {
-        CatalogFormat::V1 => run_rust_backend_v1(workspace_root, stage_root, final_versions),
+        CatalogFormat::V1 => run_rust_backend_v1(stage_root, final_versions),
         CatalogFormat::V2 => run_rust_backend_v2(
-            workspace_root,
             stage_root,
             final_versions,
             previous_packages,
@@ -39,7 +46,6 @@ pub(crate) fn run_rust_backend(
 }
 
 fn run_rust_backend_v1(
-    workspace_root: &Path,
     stage_root: &Path,
     final_versions: &HashMap<String, StoredVersion>,
 ) -> Result<()> {
@@ -49,17 +55,10 @@ fn run_rust_backend_v1(
         &publish_db_path,
         &versions_by_package,
         current_unix_epoch()?,
-    )?;
-    package_published_index(
-        workspace_root,
-        stage_root,
-        &publish_db_path,
-        CatalogFormat::V1,
     )
 }
 
 fn run_rust_backend_v2(
-    workspace_root: &Path,
     stage_root: &Path,
     final_versions: &HashMap<String, StoredVersion>,
     previous_packages: &HashMap<String, StoredPackage>,
@@ -76,12 +75,6 @@ fn run_rust_backend_v2(
         &package_builds,
         last_successful_unix,
         current_unix_epoch()?,
-    )?;
-    package_published_index(
-        workspace_root,
-        stage_root,
-        &publish_db_path,
-        CatalogFormat::V2,
     )
 }
 

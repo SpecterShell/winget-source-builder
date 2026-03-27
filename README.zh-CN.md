@@ -1,69 +1,141 @@
 # winget-source-builder
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+[简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-`winget-source-builder` 是一个面向第三方仓库的静态 WinGet 源构建工具。它按文件状态而不是 Git 提交来跟踪变化，维护一个可增量更新的内部状态库，并输出包含 `source.msix` 或 `source2.msix`、所需 sidecar 文件以及托管合并清单的发布目录。
+[![CI 状态](https://github.com/SpecterShell/winget-source-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/SpecterShell/winget-source-builder/actions/workflows/ci.yml)
+[![许可证](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![最新版本](https://img.shields.io/github/v/release/SpecterShell/winget-source-builder)](https://github.com/SpecterShell/winget-source-builder/releases)
 
-面向用户的消息现在通过 `locales/` 下的外部语言文件管理。新增语言不需要再修改 Rust 源代码。
+> 从你的清单仓库构建 WinGet 兼容的源索引 — 快速、增量、开箱即可发布。
 
-## 功能
+`winget-source-builder` 帮助你搭建私有的 WinGet 软件包仓库。如果你维护了一套软件清单集合，希望用户可以通过 `winget source add` 命令从你的源安装软件，本工具可以帮你生成所需的索引和安装包。
 
-- 基于 SQLite 状态库的文件级增量构建。
-- 使用 Rust 并行执行扫描、哈希、合并与差异计算。
-- 内容寻址的托管清单路径与 `versionData.mszyml`。
-- 兼容 WinGet 的 `source.msix` 与 `source2.msix` 输出。
-- 核心层已经保留格式抽象，未来可以通过新增 writer 适配新的 catalog 版本。
+**解决的痛点：** 创建合法的 WinGet 源需要完成复杂的索引生成、哈希计算和 MSIX 打包流程，手动操作不仅容易出错，而且效率极低。本工具实现了全流程自动化，开箱即用。
 
-## 依赖
+**工作原理：** 构建工具会扫描你的 YAML 清单，通过 SHA256 哈希跟踪文件变更，维护增量状态数据库。每次运行仅处理发生变更的内容，后续构建几乎可以瞬间完成。最终输出可直接部署的 MSIX 包（`source.msix` 或 `source2.msix`）以及托管清单文件。
 
-- 完整 WinGetUtil 路径以及 `v2` sidecar 生成需要 Windows 10/11。
-- 运行时需要 `winget-source-builder.exe` 同目录下的 `WinGetUtil.dll`。Windows 构建会默认从仓库内置的 `winget-cli` 子模块自动生成它。
-- 需要 Windows SDK 的 `makeappx.exe` 或 `makemsix`。非 Windows 构建会默认从仓库内置的 `msix-packaging` 子模块构建 `makemsix`。
-- 从源码仓库运行时需要 Rust stable，并执行 `git -c submodule.recurse=false submodule update --init winget-cli msix-packaging`。
-- 被索引的源仓库需要包含 `packaging/`，例如 `winget-source-template` 提供的模板结构。
+**适用人群：** 软件包仓库维护者、软件分发方，以及需要替代微软社区仓库、搭建私有或公共 WinGet 源的企业组织。
+
+## 安装方式
+
+### 下载预构建二进制文件
+
+从 [GitHub 发布页面](https://github.com/SpecterShell/winget-source-builder/releases) 获取对应平台的最新版本。
+
+**Windows：** 解压 zip 包后，将 `winget-source-builder.exe` 和 `WinGetUtil.dll` 放到 PATH 目录下，或直接在当前目录使用。
+
+**Linux/macOS：** 解压归档文件，打包功能需要依赖 `makemsix` 工具（构建方法参考 [开发指南](docs/en/development.md)）。
+
+### 从源码构建
+
+```powershell
+git clone https://github.com/SpecterShell/winget-source-builder.git
+cd winget-source-builder
+git -c submodule.recurse=false submodule update --init winget-cli msix-packaging
+cargo build --release
+```
+
+详细的环境配置说明请查看 [开发指南](docs/en/development.md)。
 
 ## 快速开始
 
-在源码仓库中构建：
+工作流分为两个阶段：**构建**（准备内容）和 **发布**（打包输出）。
 
 ```powershell
-git -c submodule.recurse=false submodule update --init winget-cli msix-packaging
-cargo run -- build `
-  --repo C:\path\to\source-repo\manifests `
-  --state C:\path\to\builder-state `
-  --out C:\path\to\publish-root `
-  --lang zh-CN `
-  --backend rust `
-  --format v2
+# 步骤 1：构建源索引
+winget-source-builder build `
+  --repo-dir ./manifests `
+  --state-dir ./state `
+  --index-version v2
+
+# 步骤 2：发布 MSIX 包
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging
 ```
 
-从打包好的 Windows 产物运行：
+命令执行完成后，你将得到以下输出：
+
+- `publish/source2.msix` — 主源安装包（v2 索引格式）
+- `publish/manifests/` — 托管的合并清单文件
+- `publish/packages/` — 版本数据附属文件（仅 v2 格式包含）
+
+用户即可通过以下命令添加你的软件源：
 
 ```powershell
-.\winget-source-builder.exe build `
-  --repo C:\path\to\source-repo\manifests `
-  --state C:\path\to\builder-state `
-  --out C:\path\to\publish-root `
-  --lang zh-CN `
-  --format v2
+winget source add --name mysource --argument https://your-domain.com/source2.msix
 ```
 
-输出目录：
+## 常见工作流
 
-- `--format v1` 时输出 `source.msix`，`--format v2` 时输出 `source2.msix`
-- `packages/<PackageIdentifier>/<hash8>/versionData.mszyml` 仅在 `--format v2` 下生成
-- `manifests/...`
+### 首次使用配置
 
-状态目录：
+刚接触 WinGet 源搭建？可以先阅读 [使用指南](docs/en/usage.md)，获取完整的操作教程，包括：
 
-- `state.sqlite`
-- `validation-queue.json`
-- 使用 WinGetUtil backend 时会有 `writer/mutable-v1.db` 或 `writer/mutable-v2.db`
+- 清单仓库的目录结构配置
+- 打包资源创建（AppxManifest.xml、图标）
+- 首次构建的完整流程
 
-推荐参考 `winget-source-template` 的工作流模式：用 `robinraju/release-downloader` 从 GitHub Releases 下载预构建 builder，再在模板仓库自己的 workflow 里直接执行该二进制。
+### 日常操作（添加/更新包）
 
-## 文档
+在仓库中添加或更新清单后，执行以下操作：
 
-- [使用说明](docs/zh-CN/usage.md)
-- [架构说明](docs/zh-CN/architecture.md)
-- [开发与 CI](docs/zh-CN/development.md)
+```powershell
+# 直接运行构建命令，将自动检测变更并增量更新
+winget-source-builder build `
+  --repo-dir ./manifests `
+  --state-dir ./state `
+  --index-version v2
+
+# 查看具体变更内容
+winget-source-builder diff --repo-dir ./manifests --state-dir ./state
+```
+
+构建工具会对比文件哈希与上一次的状态，仅重新处理发生变更的版本。
+
+### 发布版本
+
+准备好发布新版本时执行：
+
+```powershell
+# 基础发布（无签名）
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging
+
+# 带代码签名的发布（Windows 平台）
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging `
+  --sign-pfx-file ./cert.pfx `
+  --sign-password-env CERT_PASSWORD
+```
+
+### 查看变更内容
+
+构建前可以查看与上一次发布状态的差异：
+
+```powershell
+winget-source-builder diff --repo-dir ./manifests --state-dir ./state
+```
+
+或获取完整的状态报告：
+
+```powershell
+winget-source-builder status --repo-dir ./manifests --state-dir ./state
+```
+
+## 更多文档
+
+- **[使用指南](docs/en/usage.md)** — 分步教程，涵盖首次构建、增量构建原理和常见任务处理
+- **[CLI 参考手册](docs/en/cli-reference.md)** — 完整的命令文档与示例
+- **[架构设计](docs/en/architecture.md)** — 底层工作原理：哈希模型、状态管理和构建流水线
+- **[开发指南](docs/en/development.md)** — 源码构建、测试运行和贡献指南
+- **[贡献说明](docs/en/contributing.md)** — CI/CD 工作流和发布流程说明
+
+## 许可证
+
+采用 MIT 许可证，详情请查看 [LICENSE](LICENSE) 文件。

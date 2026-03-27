@@ -15,29 +15,9 @@ impl Messages {
         }
     }
 
-    pub(crate) fn build_started(&self, repo: &Path, out: &Path) -> String {
+    pub(crate) fn build_started(&self, repo: &Path, state: &Path) -> String {
         t!(
             "build.started",
-            locale = self.locale.as_str(),
-            repo = display_path(repo),
-            out = display_path(out)
-        )
-        .to_string()
-    }
-
-    pub(crate) fn index_started(&self, repo: &Path, out: &Path) -> String {
-        t!(
-            "index.started",
-            locale = self.locale.as_str(),
-            repo = display_path(repo),
-            out = display_path(out)
-        )
-        .to_string()
-    }
-
-    pub(crate) fn validation_started(&self, repo: &Path, state: &Path) -> String {
-        t!(
-            "validation.started",
             locale = self.locale.as_str(),
             repo = display_path(repo),
             state = display_path(state)
@@ -45,12 +25,12 @@ impl Messages {
         .to_string()
     }
 
-    pub(crate) fn validation_completed(&self, path: &Path, count: usize) -> String {
+    pub(crate) fn publish_started(&self, state: &Path, out: &Path) -> String {
         t!(
-            "validation.completed",
+            "publish.started",
             locale = self.locale.as_str(),
-            path = display_path(path),
-            count = count
+            state = display_path(state),
+            out = display_path(out)
         )
         .to_string()
     }
@@ -111,6 +91,10 @@ impl Messages {
         t!("progress.committing_output", locale = self.locale.as_str()).to_string()
     }
 
+    pub(crate) fn progress_packaging_publish(&self) -> String {
+        t!("progress.packaging_publish", locale = self.locale.as_str()).to_string()
+    }
+
     pub(crate) fn validation_queue_written(&self, count: usize, path: &Path) -> String {
         t!(
             "build.validation_queue_written",
@@ -152,18 +136,19 @@ impl Messages {
         .to_string()
     }
 
-    pub(crate) fn committing_output(&self, out: &Path) -> String {
+    pub(crate) fn build_staged(&self, stage: &Path, state: &Path) -> String {
         t!(
-            "build.committing_output",
+            "build.staged",
             locale = self.locale.as_str(),
-            out = display_path(out)
+            stage = display_path(stage),
+            state = display_path(state)
         )
         .to_string()
     }
 
-    pub(crate) fn build_completed(&self, out: &Path, state: &Path) -> String {
+    pub(crate) fn publish_completed(&self, out: &Path, state: &Path) -> String {
         t!(
-            "build.completed",
+            "publish.completed",
             locale = self.locale.as_str(),
             out = display_path(out),
             state = display_path(state)
@@ -291,8 +276,8 @@ mod tests {
     #[test]
     fn falls_back_to_english_for_unknown_locale() {
         let messages = Messages::new("fr-FR");
-        let rendered = messages.build_started(Path::new("repo"), Path::new("out"));
-        assert_eq!(rendered, "Starting build for repo repo -> out");
+        let rendered = messages.build_started(Path::new("repo"), Path::new("state"));
+        assert_eq!(rendered, "Starting build for repo repo -> state state");
     }
 
     #[test]

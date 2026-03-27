@@ -2,68 +2,140 @@
 
 [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-`winget-source-builder` is a static WinGet source builder for third-party repositories. It scans a manifest tree, tracks changes by file state instead of Git commits, keeps an internal incremental state store, and publishes a file-based output tree with `source.msix` or `source2.msix`, plus any required sidecars and hosted merged manifests.
+[![CI](https://github.com/SpecterShell/winget-source-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/SpecterShell/winget-source-builder/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/SpecterShell/winget-source-builder)](https://github.com/SpecterShell/winget-source-builder/releases)
 
-User-facing messages are localized through external locale files under `locales/`. Adding a new locale does not require editing Rust source files.
+> Build WinGet-compatible source indexes from your manifest repository — fast, incremental, and ready to publish.
 
-## Features
+`winget-source-builder` helps you run your own WinGet package repository. If you maintain a collection of software manifests and want users to install from your source using `winget source add`, this tool builds the required indexes and packages.
 
-- File-state incremental builds backed by SQLite state.
-- Parallel scan, hashing, merge, and diff stages in Rust.
-- Content-addressed hosted manifests and `versionData.mszyml`.
-- WinGet-compatible `source.msix` and `source2.msix` output.
-- Format abstraction in the core so future catalog versions can be added behind a new writer.
+**The problem it solves:** Creating a valid WinGet source involves complex indexing, hashing, and MSIX packaging. Doing this manually is error-prone and slow. This tool automates the entire pipeline.
 
-## Requirements
+**How it works:** The builder scans your YAML manifests, tracks file changes using SHA256 hashes, and maintains an incremental state database. On each run, it only processes what changed — making subsequent builds nearly instantaneous. It outputs a ready-to-deploy MSIX package (`source.msix` or `source2.msix`) plus hosted manifest files.
 
-- Windows 10/11 for the full WinGetUtil path and for `v2` sidecar generation.
-- `WinGetUtil.dll` next to `winget-source-builder.exe` at runtime. Windows builds provision it automatically from the bundled `winget-cli` submodule.
-- `makeappx.exe` from the Windows SDK or `makemsix`. Non-Windows builds provision `makemsix` from the bundled `msix-packaging` submodule.
-- For source-checkout usage: Rust stable and `git -c submodule.recurse=false submodule update --init winget-cli msix-packaging`.
-- The source repository being indexed should contain `packaging/`, for example from `winget-source-template`.
+**Who it's for:** Package repository maintainers, software distributors, and organizations that need a private or public WinGet source alternative to the Microsoft Community Repository.
+
+## Installation
+
+### Download Pre-built Binary
+
+Grab the latest release for your platform from the [GitHub releases page](https://github.com/SpecterShell/winget-source-builder/releases).
+
+**Windows:** Extract the zip and place `winget-source-builder.exe` and `WinGetUtil.dll` in your PATH or use directly.
+
+**Linux/macOS:** Extract the archive. You'll need `makemsix` available for packaging (see [Development Guide](docs/en/development.md) for building it).
+
+### Build from Source
+
+```powershell
+git clone https://github.com/SpecterShell/winget-source-builder.git
+cd winget-source-builder
+git -c submodule.recurse=false submodule update --init winget-cli msix-packaging
+cargo build --release
+```
+
+See the [Development Guide](docs/en/development.md) for detailed setup instructions.
 
 ## Quick Start
 
-Build from a source checkout:
+The workflow has two phases: **build** (prepare) and **publish** (package).
 
 ```powershell
-git -c submodule.recurse=false submodule update --init winget-cli msix-packaging
-cargo run -- build `
-  --repo C:\path\to\source-repo\manifests `
-  --state C:\path\to\builder-state `
-  --out C:\path\to\publish-root `
-  --lang en `
-  --backend rust `
-  --format v2
+# Step 1: Build the source index
+winget-source-builder build `
+  --repo-dir ./manifests `
+  --state-dir ./state `
+  --index-version v2
+
+# Step 2: Publish the MSIX package
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging
 ```
 
-Run from a packaged Windows artifact:
+After running these commands, you'll find:
+
+- `publish/source2.msix` — The main source package (for index v2)
+- `publish/manifests/` — Hosted merged manifests
+- `publish/packages/` — Version data sidecars (v2 only)
+
+Users can then add your source:
 
 ```powershell
-.\winget-source-builder.exe build `
-  --repo C:\path\to\source-repo\manifests `
-  --state C:\path\to\builder-state `
-  --out C:\path\to\publish-root `
-  --lang zh-CN `
-  --format v2
+winget source add --name mysource --argument https://your-domain.com/source2.msix
 ```
 
-Output layout:
+## Common Workflows
 
-- `source.msix` for `--format v1`, or `source2.msix` for `--format v2`
-- `packages/<PackageIdentifier>/<hash8>/versionData.mszyml` for `--format v2`
-- `manifests/...`
+### First-Time Setup
 
-State layout:
+New to WinGet sources? Start with the [Usage Guide](docs/en/usage.md) for a complete walkthrough including:
 
-- `state.sqlite`
-- `validation-queue.json`
-- `writer/mutable-v1.db` or `writer/mutable-v2.db` when using the WinGetUtil backend
+- Setting up your manifest repository structure
+- Creating packaging assets (AppxManifest.xml, icons)
+- Running your first build
 
-`winget-source-template` shows the intended downstream workflow pattern: download a prebuilt builder release with `robinraju/release-downloader`, then run the binary directly in the template repository workflow.
+### Daily Operations (Adding/Updating Packages)
 
-## Documentation
+When you add or update manifests in your repository:
 
-- [Usage](docs/en/usage.md)
-- [Architecture](docs/en/architecture.md)
-- [Development and CI](docs/en/development.md)
+```powershell
+# Just run build — it will detect changes and update incrementally
+winget-source-builder build `
+  --repo-dir ./manifests `
+  --state-dir ./state `
+  --index-version v2
+
+# Check what changed
+winget-source-builder diff --repo-dir ./manifests --state-dir ./state
+```
+
+The builder compares file hashes against the previous state. Only changed versions are reprocessed.
+
+### Publishing a Release
+
+When you're ready to publish:
+
+```powershell
+# Basic publish (unsigned)
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging
+
+# Or with code signing (Windows)
+winget-source-builder publish `
+  --state-dir ./state `
+  --out-dir ./publish `
+  --packaging-assets-dir ./packaging `
+  --sign-pfx-file ./cert.pfx `
+  --sign-password-env CERT_PASSWORD
+```
+
+### Checking What's Changed
+
+Before building, see what differs from your last published state:
+
+```powershell
+winget-source-builder diff --repo-dir ./manifests --state-dir ./state
+```
+
+Or get a full status report:
+
+```powershell
+winget-source-builder status --repo-dir ./manifests --state-dir ./state
+```
+
+## Next Steps
+
+- **[Usage Guide](docs/en/usage.md)** — Step-by-step tutorials covering your first build, understanding incremental builds, and common tasks
+- **[CLI Reference](docs/en/cli-reference.md)** — Complete command documentation with examples
+- **[Architecture](docs/en/architecture.md)** — How it works under the hood: hash model, state management, and build pipeline
+- **[Development](docs/en/development.md)** — Building from source, running tests, and contributing
+- **[Contributing](docs/en/contributing.md)** — CI/CD workflows and release process
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.

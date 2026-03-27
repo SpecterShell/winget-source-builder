@@ -31,7 +31,7 @@
 - Runtime i18n is backed by `rust-i18n` and external locale files under `locales/`. New locales can be added without editing Rust source files.
 - Source branding and MSIX resources live in the separate template/source repository.
 - Downstream repositories are expected to download release artifacts directly in their own workflows, not via a reusable action from this repository.
-- The template/source workflow is responsible for signing the generated source package with its own certificate secrets after the builder produces the publish tree.
+- The template/source workflow is still the main signing integration point, but the builder can now also sign on non-Windows when `MSIX_PACKAGING_ROOT` points at a signing-capable `makemsix` checkout and `openssl` is available.
 
 ## Known Limitations
 
@@ -139,4 +139,5 @@
 - Only first-level submodules should be initialized for this repository.
   The builder needs `winget-cli/` and `msix-packaging/`, but recursive submodule checkout can fail inside vendored content under `msix-packaging` without adding any value for this project.
 - For downstream consumption, a plain workflow that downloads a release artifact is easier to reason about than maintaining a reusable action contract in parallel.
-- Non-Windows packaging support is practical for `v1` if `makemsix` is provisioned beside the executable and launched with its library search path set explicitly.
+- Non-Windows packaging support is practical when `makemsix` is provisioned beside the executable and launched with its library search path set explicitly.
+- Non-Windows signing should use a signing-capable `makemsix` checkout, such as Mozilla's maintained fork, via `MSIX_PACKAGING_ROOT`.

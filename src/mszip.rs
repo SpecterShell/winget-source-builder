@@ -122,9 +122,12 @@ fn compress_chunk(chunk: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
             .context("failed to set MSZIP compression dictionary")?;
     }
 
-    let mut input_offset = 0usize;
-    let mut compressed = Vec::new();
+    // Pre-allocate output buffer to avoid reallocations
+    // MSZIP typically achieves 2:1 to 4:1 compression on text
+    let estimated_size = chunk.len().max(64);
+    let mut compressed = Vec::with_capacity(estimated_size);
     let mut buffer = [0u8; 8192];
+    let mut input_offset = 0usize;
 
     loop {
         let previous_in = compressor.total_in();
@@ -132,9 +135,9 @@ fn compress_chunk(chunk: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
         let status = compressor
             .compress(&chunk[input_offset..], &mut buffer, FlushCompress::Finish)
             .context("MSZIP chunk compression failed")?;
-        input_offset = compressor.total_in() as usize;
         let written = (compressor.total_out() - previous_out) as usize;
         compressed.extend_from_slice(&buffer[..written]);
+        input_offset = compressor.total_in() as usize;
 
         if status == Status::StreamEnd {
             break;
@@ -146,6 +149,7 @@ fn compress_chunk(chunk: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
         );
     }
 
+    compressed.shrink_to_fit();
     Ok(compressed)
 }
 

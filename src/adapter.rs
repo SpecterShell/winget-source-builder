@@ -1,13 +1,15 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use anyhow::anyhow;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 #[cfg(windows)]
 const WINGETUTIL_DLL_FILE_NAME: &str = "WinGetUtil.dll";
 const PACKAGING_RELATIVE_DIR: &str = "packaging";
-const APPX_MANIFEST_RELATIVE_PATH: &str = "packaging/AppxManifest.xml";
+const APPX_MANIFEST_FILE_NAME: &str = "AppxManifest.xml";
+const ASSETS_DIR_NAME: &str = "Assets";
 #[cfg(windows)]
 const MISSING_PACKAGE_HRESULT: u32 = 0x8A15004D;
 
@@ -23,7 +25,6 @@ pub struct AdapterRequest {
     pub package_update_tracking_base_time: i64,
     pub schema_major_version: u32,
     pub schema_minor_version: u32,
-    pub package_output_name: String,
     pub operations: Vec<AdapterOperation>,
 }
 
@@ -35,14 +36,16 @@ pub struct AdapterOperation {
     pub relative_path: String,
 }
 
-pub fn run_adapter(
-    workspace_root: &Path,
-    request: &AdapterRequest,
-    stage_root: &Path,
-) -> Result<()> {
+/// Applies incremental WinGetUtil operations to a staged candidate database on Windows.
+///
+/// # Arguments
+///
+/// * `request` - Operation list plus mutable, candidate, and publish DB paths for the writer.
+/// * `stage_root` - Staging directory that contains the candidate writer inputs for this build.
+pub fn run_adapter(request: &AdapterRequest, stage_root: &Path) -> Result<()> {
     #[cfg(not(windows))]
     {
-        let _ = (workspace_root, request, stage_root);
+        let _ = (request, stage_root);
         bail!("WinGetUtil integration only runs on Windows")
     }
 
@@ -53,19 +56,26 @@ pub fn run_adapter(
                 "WinGetUtil.dll was not found next to the executable. Build the project on Windows so build.rs can provision it."
             )
         })?;
-        let msix_resources_root = resolve_msix_resources_root(workspace_root)?;
         let writer = windows::WinGetWriter::load(&winget_util_path)?;
-        writer.run(request, stage_root, &msix_resources_root)
+        writer.run(request, stage_root)
     }
 }
 
+/// Packages a staged publish database and static assets into `source.msix` or `source2.msix`.
+///
+/// # Arguments
+///
+/// * `packaging_assets_root` - Directory containing `AppxManifest.xml` and `Assets/`.
+/// * `stage_root` - Staging directory where the packager can assemble the temporary layout.
+/// * `publish_db_path` - Prepared `Public/index.db` to embed into the package.
+/// * `format` - Catalog family that selects `source.msix` or `source2.msix`.
 pub fn package_published_index(
-    workspace_root: &Path,
+    packaging_assets_root: &Path,
     stage_root: &Path,
     publish_db_path: &Path,
     format: CatalogFormat,
 ) -> Result<()> {
-    let msix_resources_root = resolve_msix_resources_root(workspace_root)?;
+    let msix_resources_root = validate_packaging_assets_root(packaging_assets_root)?;
     package_source_msix(
         stage_root,
         publish_db_path,
@@ -74,6 +84,187 @@ pub fn package_published_index(
     )
 }
 
+/// Signs a packaged MSIX with the host-native signing toolchain.
+///
+/// # Arguments
+///
+/// * `package_path` - Existing MSIX package to sign in place.
+/// * `pfx_file` - Signing certificate bundle in PFX format.
+/// * `password` - Optional PFX password, if the certificate is protected.
+/// * `timestamp_url` - Optional RFC 3161 timestamp service URL on Windows.
+pub fn sign_published_index(
+    package_path: &Path,
+    pfx_file: &Path,
+    password: Option<&str>,
+    timestamp_url: Option<&str>,
+) -> Result<()> {
+    #[cfg(not(windows))]
+    {
+        use std::process::Command;
+
+        let makemsix = resolve_makemsix_path()
+            .ok_or_else(|| anyhow!("makemsix was not found for MSIX signing"))?;
+        ensure_makemsix_supports_sign(&makemsix)?;
+
+        if timestamp_url.is_some() {
+            bail!("--timestamp-url is not supported for makemsix signing on non-Windows hosts");
+        }
+
+        let openssl = resolve_openssl_path()
+            .ok_or_else(|| anyhow!("openssl was not found for MSIX signing"))?;
+        let temp_dir =
+            tempfile::tempdir().context("failed to create temporary directory for MSIX signing")?;
+        let cert_pem = temp_dir.path().join("signing-cert.pem");
+        let key_pem = temp_dir.path().join("signing-key.pem");
+        let converted_pfx = temp_dir.path().join("signing-passwordless.pfx");
+
+        // Mozilla's makemsix signing flow expects a passwordless PFX, so we transiently
+        // split the input PFX into PEM parts and re-export it just for this signing step.
+        export_pfx_certificate_pem(&openssl, pfx_file, password, &cert_pem)?;
+        export_pfx_private_key_pem(&openssl, pfx_file, password, &key_pem)?;
+        export_passwordless_pfx(&openssl, &cert_pem, &key_pem, &converted_pfx)?;
+
+        let mut command = Command::new(&makemsix);
+        command
+            .arg("sign")
+            .arg("-p")
+            .arg(package_path)
+            .arg("-c")
+            .arg(&converted_pfx);
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(runtime_dir) = makemsix.parent() {
+            #[cfg(target_os = "linux")]
+            prepend_library_path(&mut command, "LD_LIBRARY_PATH", runtime_dir);
+
+            #[cfg(target_os = "macos")]
+            prepend_library_path(&mut command, "DYLD_LIBRARY_PATH", runtime_dir);
+        }
+
+        let output = command
+            .output()
+            .with_context(|| format!("failed to start {}", makemsix.display()))?;
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let details = [stdout, stderr]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "{} failed for {}{}\n{}",
+                makemsix.display(),
+                package_path.display(),
+                if details.is_empty() { "" } else { ":" },
+                details
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+
+        let signtool = resolve_signtool_path()
+            .ok_or_else(|| anyhow!("signtool.exe was not found for MSIX signing"))?;
+        let mut command = Command::new(&signtool);
+        command
+            .arg("sign")
+            .arg("/fd")
+            .arg("SHA256")
+            .arg("/f")
+            .arg(pfx_file);
+        if let Some(password) = password {
+            command.arg("/p").arg(password);
+        }
+        if let Some(timestamp_url) = timestamp_url {
+            command
+                .arg("/tr")
+                .arg(timestamp_url)
+                .arg("/td")
+                .arg("SHA256");
+        }
+        command.arg(package_path);
+
+        let output = command
+            .output()
+            .with_context(|| format!("failed to start {}", signtool.display()))?;
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let details = [stdout, stderr]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "{} failed for {}{}\n{}",
+                signtool.display(),
+                package_path.display(),
+                if details.is_empty() { "" } else { ":" },
+                details
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Reports whether `WinGetUtil.dll` is available next to the executable on this host.
+pub fn runtime_wingetutil_available() -> bool {
+    #[cfg(windows)]
+    {
+        resolve_existing_win_get_util_path().is_some()
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Returns the resolved MSIX packager path if one is available.
+pub fn runtime_msix_packager() -> Option<String> {
+    resolve_msix_packager().map(|packager| packager.path().display().to_string())
+}
+
+/// Returns the resolved MSIX signing tool path if one is available on this host.
+pub fn runtime_msix_signer() -> Option<String> {
+    #[cfg(windows)]
+    {
+        resolve_signtool_path().map(|path| path.display().to_string())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let path = resolve_makemsix_path()?;
+        if makemsix_supports_sign(&path) {
+            Some(path.display().to_string())
+        } else {
+            None
+        }
+    }
+}
+
+/// Returns the resolved `openssl` path for non-Windows signing flows.
+pub fn runtime_openssl() -> Option<String> {
+    #[cfg(windows)]
+    {
+        None
+    }
+
+    #[cfg(not(windows))]
+    {
+        resolve_openssl_path().map(|path| path.display().to_string())
+    }
+}
+
+/// Renders a path as an absolute string while tolerating paths that do not exist yet.
+///
+/// # Arguments
+///
+/// * `path` - Path to canonicalize for logging or machine-readable output.
 pub fn absolute_string(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| PathBuf::from(path))
@@ -81,6 +272,12 @@ pub fn absolute_string(path: &Path) -> String {
         .to_string()
 }
 
+#[cfg(test)]
+/// Resolves the most likely workspace root for test fixtures and local developer runs.
+///
+/// # Arguments
+///
+/// * `repo_root_hint` - Optional repo root supplied by the caller to short-circuit discovery.
 pub fn resolve_workspace_root(repo_root_hint: Option<&Path>) -> Result<PathBuf> {
     if let Ok(override_root) = env::var("WINGET_SOURCE_BUILDER_WORKSPACE_ROOT") {
         return Ok(normalize_path(PathBuf::from(override_root)));
@@ -104,7 +301,45 @@ pub fn resolve_workspace_root(repo_root_hint: Option<&Path>) -> Result<PathBuf> 
     )
 }
 
+/// Resolves the packaging asset directory from an explicit override or workspace hints.
+///
+/// # Arguments
+///
+/// * `packaging_assets_override` - Explicit packaging directory supplied by the caller, if any.
+/// * `repo_root_hint` - Optional repo root used for fallback discovery when no explicit path is given.
+pub fn resolve_packaging_assets_root(
+    packaging_assets_override: Option<&Path>,
+    repo_root_hint: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(packaging_assets_override) = packaging_assets_override {
+        return validate_packaging_assets_root(packaging_assets_override);
+    }
+
+    if let Ok(override_root) = env::var("WINGET_SOURCE_BUILDER_WORKSPACE_ROOT") {
+        let override_root = PathBuf::from(override_root);
+        if let Some(packaging_root) = packaging_assets_candidate(&override_root) {
+            return Ok(packaging_root);
+        }
+    }
+
+    let candidates = workspace_root_candidates(repo_root_hint)?;
+    for candidate in candidates {
+        if let Some(packaging_root) = packaging_assets_candidate(&candidate) {
+            return Ok(packaging_root);
+        }
+    }
+
+    bail!(
+        "failed to locate packaging assets; pass --packaging-assets-dir, set WINGET_SOURCE_BUILDER_WORKSPACE_ROOT, or keep packaging next to the source repository"
+    )
+}
+
 #[cfg(test)]
+/// Checks whether Windows-only runtime dependencies are available for end-to-end tests.
+///
+/// # Arguments
+///
+/// * `workspace_root` - Repo root used to locate bundled build-time dependencies.
 pub fn windows_build_dependencies_available(workspace_root: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -120,6 +355,11 @@ pub fn windows_build_dependencies_available(workspace_root: &Path) -> bool {
 }
 
 #[cfg(test)]
+/// Checks whether any MSIX packager is available for packaging tests on this host.
+///
+/// # Arguments
+///
+/// * `workspace_root` - Repo root used to locate bundled packaging tooling.
 pub fn msix_packaging_available(workspace_root: &Path) -> bool {
     let _ = workspace_root;
     resolve_msix_packager().is_some()
@@ -175,10 +415,15 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+#[cfg(test)]
 fn looks_like_packaging_root(workspace_root: &Path) -> bool {
-    workspace_root.join(APPX_MANIFEST_RELATIVE_PATH).is_file()
+    workspace_root
+        .join(PACKAGING_RELATIVE_DIR)
+        .join(APPX_MANIFEST_FILE_NAME)
+        .is_file()
 }
 
+#[cfg(test)]
 fn looks_like_workspace_root(workspace_root: &Path) -> bool {
     workspace_root.join("Cargo.toml").is_file()
         || workspace_root.join(PACKAGING_RELATIVE_DIR).is_dir()
@@ -189,9 +434,28 @@ fn resolve_existing_win_get_util_path() -> Option<PathBuf> {
     resolve_side_by_side_binary(&[WINGETUTIL_DLL_FILE_NAME])
 }
 
-fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
-    let resource_root = workspace_root.join(PACKAGING_RELATIVE_DIR);
-    let manifest_path = workspace_root.join(APPX_MANIFEST_RELATIVE_PATH);
+fn packaging_assets_candidate(path: &Path) -> Option<PathBuf> {
+    let normalized = normalize_path(path.canonicalize().unwrap_or(path.to_path_buf()));
+    if looks_like_packaging_assets_root(&normalized) {
+        return Some(normalized);
+    }
+
+    let packaging_child = normalized.join(PACKAGING_RELATIVE_DIR);
+    if looks_like_packaging_assets_root(&packaging_child) {
+        return Some(packaging_child);
+    }
+
+    None
+}
+
+fn looks_like_packaging_assets_root(path: &Path) -> bool {
+    path.join(APPX_MANIFEST_FILE_NAME).is_file() && path.join(ASSETS_DIR_NAME).is_dir()
+}
+
+fn validate_packaging_assets_root(path: &Path) -> Result<PathBuf> {
+    let normalized = normalize_path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+    let manifest_path = normalized.join(APPX_MANIFEST_FILE_NAME);
+    let assets_dir = normalized.join(ASSETS_DIR_NAME);
 
     if !manifest_path.is_file() {
         bail!(
@@ -200,7 +464,14 @@ fn resolve_msix_resources_root(workspace_root: &Path) -> Result<PathBuf> {
         );
     }
 
-    Ok(resource_root)
+    if !assets_dir.is_dir() {
+        bail!(
+            "MSIX assets directory was not found at {}",
+            assets_dir.display()
+        );
+    }
+
+    Ok(normalized)
 }
 
 #[cfg(windows)]
@@ -258,6 +529,62 @@ fn resolve_makemsix_path() -> Option<PathBuf> {
     find_in_path(&["makemsix", "makemsix.exe"])
 }
 
+#[cfg(not(windows))]
+fn resolve_openssl_path() -> Option<PathBuf> {
+    if let Ok(env_override) = env::var("OPENSSL") {
+        let env_override = PathBuf::from(env_override);
+        if env_override.is_file() {
+            return Some(env_override);
+        }
+    }
+
+    find_in_path(&["openssl", "openssl.exe"])
+}
+
+#[cfg(windows)]
+fn resolve_signtool_path() -> Option<PathBuf> {
+    if let Ok(env_override) = env::var("SIGNTOOL_EXE") {
+        let env_override = PathBuf::from(env_override);
+        if env_override.is_file() {
+            return Some(env_override);
+        }
+    }
+
+    if let Some(path) = find_in_path(&["signtool.exe", "signtool"]) {
+        return Some(path);
+    }
+
+    let program_files_x86 = env::var_os("ProgramFiles(x86)")?;
+    let kits_root = PathBuf::from(program_files_x86)
+        .join("Windows Kits")
+        .join("10")
+        .join("bin");
+
+    if !kits_root.is_dir() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    for entry in walkdir::WalkDir::new(kits_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry.path();
+        if path.file_name().and_then(|name| name.to_str()) != Some("signtool.exe") {
+            continue;
+        }
+        if !path.to_string_lossy().contains("\\x64\\") {
+            continue;
+        }
+        candidates.push(path.to_path_buf());
+    }
+
+    candidates.sort_by(|left, right| right.cmp(left));
+    candidates.into_iter().next()
+}
+
 fn resolve_side_by_side_binary(file_names: &[&str]) -> Option<PathBuf> {
     let current_exe = env::current_exe().ok()?;
     let mut roots = Vec::new();
@@ -289,7 +616,160 @@ fn find_in_path(candidates: &[&str]) -> Option<PathBuf> {
                 .iter()
                 .map(move |candidate| directory.join(candidate))
         })
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| {
+            // Check if the path is a file and is accessible
+            candidate.is_file() && fs::metadata(candidate).is_ok()
+        })
+}
+
+#[cfg(not(windows))]
+fn makemsix_supports_sign(path: &Path) -> bool {
+    use std::process::Command;
+
+    let mut command = Command::new(path);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Some(runtime_dir) = path.parent() {
+        #[cfg(target_os = "linux")]
+        prepend_library_path(&mut command, "LD_LIBRARY_PATH", runtime_dir);
+
+        #[cfg(target_os = "macos")]
+        prepend_library_path(&mut command, "DYLD_LIBRARY_PATH", runtime_dir);
+    }
+
+    let Ok(output) = command.output() else {
+        return false;
+    };
+
+    tool_output_mentions_sign(&output.stdout, &output.stderr)
+}
+
+#[cfg(not(windows))]
+fn ensure_makemsix_supports_sign(path: &Path) -> Result<()> {
+    if !makemsix_supports_sign(path) {
+        bail!(
+            "makemsix at {} does not support the 'sign' operation. Use Mozilla's signing-capable fork or pass a Windows-built signed package instead",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn tool_output_mentions_sign(stdout: &[u8], stderr: &[u8]) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+    .to_ascii_lowercase();
+    combined.contains("sign")
+}
+
+#[cfg(not(windows))]
+fn export_pfx_certificate_pem(
+    openssl: &Path,
+    pfx_file: &Path,
+    password: Option<&str>,
+    cert_pem: &Path,
+) -> Result<()> {
+    run_openssl(
+        openssl,
+        &[
+            "pkcs12",
+            "-in",
+            &absolute_string(pfx_file),
+            "-clcerts",
+            "-nokeys",
+            "-out",
+            &absolute_string(cert_pem),
+            "-passin",
+            &openssl_pass_arg(password),
+        ],
+    )
+}
+
+#[cfg(not(windows))]
+fn export_pfx_private_key_pem(
+    openssl: &Path,
+    pfx_file: &Path,
+    password: Option<&str>,
+    key_pem: &Path,
+) -> Result<()> {
+    run_openssl(
+        openssl,
+        &[
+            "pkcs12",
+            "-in",
+            &absolute_string(pfx_file),
+            "-nocerts",
+            "-nodes",
+            "-out",
+            &absolute_string(key_pem),
+            "-passin",
+            &openssl_pass_arg(password),
+        ],
+    )
+}
+
+#[cfg(not(windows))]
+fn export_passwordless_pfx(
+    openssl: &Path,
+    cert_pem: &Path,
+    key_pem: &Path,
+    output_pfx: &Path,
+) -> Result<()> {
+    run_openssl(
+        openssl,
+        &[
+            "pkcs12",
+            "-export",
+            "-inkey",
+            &absolute_string(key_pem),
+            "-in",
+            &absolute_string(cert_pem),
+            "-name",
+            "winget-source-builder",
+            "-keypbe",
+            "NONE",
+            "-certpbe",
+            "NONE",
+            "-passout",
+            "pass:",
+            "-out",
+            &absolute_string(output_pfx),
+        ],
+    )
+}
+
+#[cfg(not(windows))]
+fn openssl_pass_arg(password: Option<&str>) -> String {
+    format!("pass:{}", password.unwrap_or_default())
+}
+
+#[cfg(not(windows))]
+fn run_openssl(openssl: &Path, args: &[&str]) -> Result<()> {
+    use std::process::Command;
+
+    let output = Command::new(openssl)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to start {}", openssl.display()))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let details = [stdout, stderr]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "{} failed{}\n{}",
+            openssl.display(),
+            if details.is_empty() { "" } else { ":" },
+            details
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -343,14 +823,16 @@ fn package_source_msix(
     use anyhow::{Context, anyhow, ensure};
     use walkdir::WalkDir;
 
+    // Build the package from a throwaway layout so the staging tree remains the source of truth
+    // for later copy/publish steps.
     let temp_dir = stage_root.join("_msix");
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)
             .with_context(|| format!("failed to remove {}", temp_dir.display()))?;
     }
 
-    let source_manifest_path = msix_resources_root.join("AppxManifest.xml");
-    let source_assets_dir = msix_resources_root.join("Assets");
+    let source_manifest_path = msix_resources_root.join(APPX_MANIFEST_FILE_NAME);
+    let source_assets_dir = msix_resources_root.join(ASSETS_DIR_NAME);
     ensure!(
         source_manifest_path.is_file(),
         "MSIX AppxManifest.xml was not found at {}",
@@ -373,7 +855,7 @@ fn package_source_msix(
         )
     })?;
 
-    let appx_manifest_path = temp_dir.join("AppxManifest.xml");
+    let appx_manifest_path = temp_dir.join(APPX_MANIFEST_FILE_NAME);
     fs::copy(&source_manifest_path, &appx_manifest_path).with_context(|| {
         format!(
             "failed to copy {} to {}",
@@ -532,12 +1014,7 @@ mod windows {
             })
         }
 
-        pub(super) fn run(
-            &self,
-            request: &AdapterRequest,
-            stage_root: &Path,
-            msix_resources_root: &Path,
-        ) -> Result<()> {
+        pub(super) fn run(&self, request: &AdapterRequest, stage_root: &Path) -> Result<()> {
             let mutable_db_path = PathBuf::from(&request.mutable_db_path);
             let candidate_db_path = PathBuf::from(&request.candidate_db_path);
             let publish_db_path = PathBuf::from(&request.publish_db_path);
@@ -611,13 +1088,6 @@ mod windows {
             )?;
             publish.prepare_for_packaging()?;
             drop(publish);
-
-            super::package_source_msix(
-                stage_root,
-                &publish_db_path,
-                msix_resources_root,
-                &request.package_output_name,
-            )?;
             Ok(())
         }
 
@@ -895,5 +1365,31 @@ mod windows {
             }
             String::from_utf16_lossy(std::slice::from_raw_parts(value, len))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(windows))]
+    use super::{openssl_pass_arg, tool_output_mentions_sign};
+
+    #[cfg(not(windows))]
+    #[test]
+    fn detects_sign_capability_from_tool_output() {
+        assert!(tool_output_mentions_sign(
+            b"usage: makemsix pack\nusage: makemsix sign\n",
+            b""
+        ));
+        assert!(!tool_output_mentions_sign(
+            b"usage: makemsix pack\nusage: makemsix unpack\n",
+            b""
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn renders_empty_and_non_empty_openssl_password_args() {
+        assert_eq!(openssl_pass_arg(None), "pass:");
+        assert_eq!(openssl_pass_arg(Some("secret")), "pass:secret");
     }
 }
